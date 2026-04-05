@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangLens — Language Study from Text</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <aside id="sidebar">
+        <div class="sidebar-brand">
+            <h1>🔍 LangLens</h1>
+            <span class="tagline">Study from Text</span>
+        </div>
+        <nav>
+            <a href="#" data-view="dashboard" class="nav-link active">
+                <span class="nav-icon">📊</span> Dashboard
+            </a>
+            <a href="#" data-view="library" class="nav-link">
+                <span class="nav-icon">📚</span> Library
+            </a>
+            <a href="#" data-view="vocab" class="nav-link">
+                <span class="nav-icon">🔤</span> Vocabulary
+            </a>
+            <a href="#" data-view="review" class="nav-link">
+                <span class="nav-icon">🧠</span> Review
+                <span id="review-badge" class="badge hidden">0</span>
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <button id="btn-export" class="btn-subtle" title="Export all data as JSON">⬇ Export</button>
+            <button id="btn-import" class="btn-subtle" title="Import data from JSON">⬆ Import</button>
+            <input type="file" id="import-file" accept=".json" hidden>
+        </div>
+    </aside>
+
+    <main id="main">
+        <div id="view-dashboard" class="view"></div>
+        <div id="view-library" class="view hidden"></div>
+        <div id="view-reader" class="view hidden"></div>
+        <div id="view-vocab" class="view hidden"></div>
+        <div id="view-review" class="view hidden"></div>
+    </main>
+
+    <!-- Modal Overlay -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div id="modal-content" class="modal-content"></div>
+    </div>
+
+    <!-- Floating Selection Toolbar -->
+    <div id="selection-toolbar" class="selection-toolbar hidden">
+        <button data-type="vocab" class="st-btn st-vocab">📝 Vocab</button>
+        <button data-type="grammar" class="st-btn st-grammar">📐 Grammar</button>
+        <button data-type="phrase" class="st-btn st-phrase">💬 Phrase</button>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="js/db.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
