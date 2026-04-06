@@ -1924,39 +1924,79 @@ class App {
     }
 
     async renderLibrary() {
-        const sources = await this.db.getAllSources();
-        const highlights = await this.db.getAllHighlights();
+        const [sources, highlights] = await Promise.all([
+            this.db.getAllSources(),
+            this.db.getAllHighlights()
+        ]);
         const counts = {};
         for (const item of highlights) {
             if (item.sourceId) counts[item.sourceId] = (counts[item.sourceId] || 0) + 1;
         }
 
+        const languageSet = new Set();
+        const tagSet = new Set();
+        for (const source of sources) {
+            const language = String(source.language || '').trim();
+            if (language) languageSet.add(language);
+
+            for (const tag of Array.isArray(source.tags) ? source.tags : []) {
+                const normalizedTag = String(tag || '').trim();
+                if (normalizedTag) tagSet.add(normalizedTag);
+            }
+        }
+
         const view = document.getElementById('view-library');
-        const sorted = [...sources].sort((a, b) => b.createdAt - a.createdAt);
+        const totalSources = sources.length;
+        const languages = [...languageSet].sort((a, b) => a.localeCompare(b));
+        const tags = [...tagSet].sort((a, b) => a.localeCompare(b));
+        const sourceTypes = [
+            { value: 'article', label: 'Article' },
+            { value: 'audio', label: 'Audio Transcript' },
+            { value: 'video', label: 'Video Subtitle' },
+            { value: 'other', label: 'Other' }
+        ];
 
-        view.innerHTML = `
-            <div class="view-header">
-                <h2>📚 Library</h2>
-                <div class="view-header-actions">
-                    <span style="color:var(--text-secondary);font-size:0.85rem;">${sorted.length} texts</span>
-                    <button class="btn btn-primary" id="lib-add">➕ Add Text</button>
-                </div>
-            </div>
+        const renderCards = (visibleSources) => {
+            const container = document.getElementById('library-cards-container');
+            const countLabel = document.getElementById('lib-count');
+            const totalLabel = `${totalSources} text${totalSources === 1 ? '' : 's'}`;
 
-            <div class="library-dropzone" id="library-dropzone">
-                <div class="library-dropzone-title">Drop files or text here</div>
-                <p>Drop text files, PDFs, HTML, or pasted text to add them to the library. If you drop one image with one article file, it becomes the article image. Single-click a card to read it, double-click to edit it.</p>
-            </div>
+            if (countLabel) {
+                countLabel.textContent = visibleSources.length === totalSources
+                    ? totalLabel
+                    : `${visibleSources.length} of ${totalLabel}`;
+            }
 
-            ${sorted.length === 0 ? `
-                <div class="empty-state">
-                    <div class="empty-icon">📚</div>
-                    <p>Your text library is empty. Add a source if you want to pull study items directly from reading.</p>
-                    <button class="btn btn-primary" id="lib-add-empty">➕ Add Your First Text</button>
-                </div>
-            ` : `
+            if (visibleSources.length === 0) {
+                container.innerHTML = totalSources === 0 ? `
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <p>Your text library is empty. Add a source if you want to pull study items directly from reading.</p>
+                        <button class="btn btn-primary" id="lib-add-empty">➕ Add Your First Text</button>
+                    </div>
+                ` : `
+                    <div class="empty-state">
+                        <div class="empty-icon">🗂️</div>
+                        <p>No texts match the current filters. Adjust the search or clear the filter bar.</p>
+                        <button class="btn btn-secondary" id="lib-clear-filters">Reset Filters</button>
+                    </div>
+                `;
+
+                document.getElementById('lib-add-empty')?.addEventListener('click', () => this.showAddSourceModal());
+                document.getElementById('lib-clear-filters')?.addEventListener('click', () => {
+                    document.getElementById('library-search').value = '';
+                    document.getElementById('library-filter-type').value = '';
+                    document.getElementById('library-filter-language').value = '';
+                    document.getElementById('library-filter-tag').value = '';
+                    document.getElementById('library-sort').value = 'newest';
+                    applyFilters();
+                });
+                return;
+            }
+
+            container.innerHTML = `
                 <div class="cards-grid">
-                    ${sorted.map(source => `
+                    ${visibleSources.map(source => `
                         <div class="source-card" data-id="${source.id}">
                             ${source.imageUrl ? `
                                 <div class="source-card-image" data-source-image-shell>
@@ -1989,59 +2029,144 @@ class App {
                         </div>
                     `).join('')}
                 </div>
-            `}
+            `;
+
+            container.querySelectorAll('.source-card').forEach(card => {
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.icon-action-btn')) return;
+
+                    clearTimeout(this._libraryCardClickTimer);
+                    const sourceId = parseInt(card.dataset.id, 10);
+                    this._libraryCardClickTimer = setTimeout(() => {
+                        this.openReader(sourceId);
+                        this._libraryCardClickTimer = null;
+                    }, 220);
+                });
+
+                card.addEventListener('dblclick', (e) => {
+                    if (e.target.closest('.icon-action-btn')) return;
+
+                    clearTimeout(this._libraryCardClickTimer);
+                    this._libraryCardClickTimer = null;
+                    const sourceId = parseInt(card.dataset.id, 10);
+                    const source = visibleSources.find(entry => entry.id === sourceId);
+                    if (source) {
+                        this.showEditSourceModal({
+                            ...source,
+                            tags: [...(source.tags || [])]
+                        });
+                    }
+                });
+            });
+
+            container.querySelectorAll('.icon-action-btn[data-source-action]').forEach(button => {
+                button.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const card = button.closest('.source-card');
+                    const sourceId = parseInt(card.dataset.id, 10);
+                    const source = visibleSources.find(entry => entry.id === sourceId);
+                    if (!source) return;
+
+                    if (button.dataset.sourceAction === 'edit') {
+                        this.showEditSourceModal({
+                            ...source,
+                            tags: [...(source.tags || [])]
+                        });
+                        return;
+                    }
+
+                    await this.deleteSourceWithConfirm(sourceId);
+                });
+            });
+
+            this.bindSourceImageFallback(container);
+        };
+
+        const applyFilters = () => {
+            const search = document.getElementById('library-search').value.trim().toLowerCase();
+            const type = document.getElementById('library-filter-type').value;
+            const language = document.getElementById('library-filter-language').value;
+            const tag = document.getElementById('library-filter-tag').value;
+            const sort = document.getElementById('library-sort').value;
+
+            let filtered = [...sources];
+
+            if (search) {
+                filtered = filtered.filter(source => {
+                    const haystack = [
+                        source.title || '',
+                        source.content || '',
+                        source.language || '',
+                        source.sourceType || '',
+                        ...(Array.isArray(source.tags) ? source.tags : [])
+                    ].join(' ').toLowerCase();
+
+                    return haystack.includes(search);
+                });
+            }
+
+            if (type) filtered = filtered.filter(source => (source.sourceType || 'article') === type);
+            if (language) filtered = filtered.filter(source => String(source.language || '').trim() === language);
+            if (tag) filtered = filtered.filter(source => Array.isArray(source.tags) && source.tags.includes(tag));
+
+            if (sort === 'newest') filtered.sort((a, b) => b.createdAt - a.createdAt);
+            if (sort === 'oldest') filtered.sort((a, b) => a.createdAt - b.createdAt);
+            if (sort === 'alpha') {
+                filtered.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
+            }
+            if (sort === 'items-desc') {
+                filtered.sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0) || b.createdAt - a.createdAt);
+            }
+
+            renderCards(filtered);
+        };
+
+        view.innerHTML = `
+            <div class="view-header">
+                <h2>📚 Library</h2>
+                <div class="view-header-actions">
+                    <span id="lib-count" style="color:var(--text-secondary);font-size:0.85rem;">${totalSources} texts</span>
+                    <button class="btn btn-primary" id="lib-add">➕ Add Text</button>
+                </div>
+            </div>
+
+            <div class="vocab-filters">
+                <input type="text" id="library-search" placeholder="🔍 Search title, text, tags, language...">
+                <select id="library-filter-type">
+                    <option value="">All Types</option>
+                    ${sourceTypes.map(type => `<option value="${type.value}">${this.esc(type.label)}</option>`).join('')}
+                </select>
+                <select id="library-filter-language">
+                    <option value="">All Languages</option>
+                    ${languages.map(language => `<option value="${this.esc(language)}">${this.esc(language)}</option>`).join('')}
+                </select>
+                <select id="library-filter-tag">
+                    <option value="">All Tags</option>
+                    ${tags.map(tag => `<option value="${this.esc(tag)}">${this.esc(tag)}</option>`).join('')}
+                </select>
+                <select id="library-sort">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="alpha">Title A → Z</option>
+                    <option value="items-desc">Most Items</option>
+                </select>
+            </div>
+
+            <div class="library-dropzone" id="library-dropzone">
+                <div class="library-dropzone-title">Drop files or text here</div>
+                <p>Drop text files, PDFs, HTML, or pasted text to add them to the library. If you drop one image with one article file, it becomes the article image. Single-click a card to read it, double-click to edit it.</p>
+            </div>
+
+            <div id="library-cards-container"></div>
         `;
 
         document.getElementById('lib-add')?.addEventListener('click', () => this.showAddSourceModal());
-        document.getElementById('lib-add-empty')?.addEventListener('click', () => this.showAddSourceModal());
-        view.querySelectorAll('.source-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('.icon-action-btn')) return;
-
-                clearTimeout(this._libraryCardClickTimer);
-                const sourceId = parseInt(card.dataset.id, 10);
-                this._libraryCardClickTimer = setTimeout(() => {
-                    this.openReader(sourceId);
-                    this._libraryCardClickTimer = null;
-                }, 220);
-            });
-
-            card.addEventListener('dblclick', (e) => {
-                if (e.target.closest('.icon-action-btn')) return;
-
-                clearTimeout(this._libraryCardClickTimer);
-                this._libraryCardClickTimer = null;
-                const sourceId = parseInt(card.dataset.id, 10);
-                const source = sorted.find(entry => entry.id === sourceId);
-                if (source) {
-                    this.showEditSourceModal({
-                        ...source,
-                        tags: [...(source.tags || [])]
-                    });
-                }
-            });
-        });
-        view.querySelectorAll('.icon-action-btn[data-source-action]').forEach(button => {
-            button.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const card = button.closest('.source-card');
-                const sourceId = parseInt(card.dataset.id, 10);
-                const source = sorted.find(entry => entry.id === sourceId);
-                if (!source) return;
-
-                if (button.dataset.sourceAction === 'edit') {
-                    this.showEditSourceModal({
-                        ...source,
-                        tags: [...(source.tags || [])]
-                    });
-                    return;
-                }
-
-                await this.deleteSourceWithConfirm(sourceId);
-            });
+        ['library-search', 'library-filter-type', 'library-filter-language', 'library-filter-tag', 'library-sort'].forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener(id === 'library-search' ? 'input' : 'change', applyFilters);
         });
         this.bindLibraryDropzone(view);
-        this.bindSourceImageFallback(view);
+        applyFilters();
     }
 
     showAddSourceModal(initialData = {}) {
