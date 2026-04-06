@@ -148,6 +148,23 @@ test('encrypted backups are sealed and decrypt successfully', async () => {
     db.db.close();
 });
 
+test('encrypted backups can omit a passphrase and still restore with a blank one', async () => {
+    const encryptedBackup = await BackupUtils.encryptBackupData(plainFixture, '', webcrypto, {
+        salt: Uint8Array.from([1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]),
+        iv: Uint8Array.from([42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53])
+    });
+
+    assert.equal(typeof encryptedBackup, 'string');
+    assert.match(encryptedBackup, new RegExp(`^${BackupUtils.SEALED_BACKUP_PREFIX}\.`));
+
+    const decrypted = await BackupUtils.decryptBackupData(encryptedBackup, '', webcrypto);
+
+    assert.equal(decrypted.format, plainFixture.format);
+    assert.equal(decrypted.sources[0].title, plainFixture.sources[0].title);
+    assert.equal(decrypted.highlights[0].text, plainFixture.highlights[0].text);
+    assert.equal(decrypted.readingNotes[0].note, plainFixture.readingNotes[0].note);
+});
+
 test('legacy encrypted fixture still decrypts successfully', async () => {
     const decrypted = await BackupUtils.decryptBackupData(legacyEncryptedFixture, 'langlens-fixture-passphrase', webcrypto);
 

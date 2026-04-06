@@ -3,6 +3,10 @@
     const SEALED_BACKUP_PREFIX = 'LLB2';
 
     class BackupUtils {
+        static normalizePassphrase(passphrase) {
+            return String(passphrase ?? '');
+        }
+
         static backupSummary(data = {}) {
             return {
                 exportedAt: data.exportedAt || Date.now(),
@@ -89,9 +93,10 @@
             }
 
             const encoder = new TextEncoder();
+            const normalizedPassphrase = BackupUtils.normalizePassphrase(passphrase);
             const baseKey = await cryptoImpl.subtle.importKey(
                 'raw',
-                encoder.encode(passphrase),
+                encoder.encode(normalizedPassphrase),
                 'PBKDF2',
                 false,
                 ['deriveKey']
@@ -147,10 +152,6 @@
         }
 
         static async encryptBackupData(data, passphrase, cryptoImpl = globalScope.crypto, options = {}) {
-            if (!passphrase) {
-                throw new Error('A passphrase is required for encrypted backups');
-            }
-
             const summary = BackupUtils.backupSummary(data);
             const salt = options.salt ? new Uint8Array(options.salt) : cryptoImpl.getRandomValues(new Uint8Array(16));
             const iv = options.iv ? new Uint8Array(options.iv) : cryptoImpl.getRandomValues(new Uint8Array(12));

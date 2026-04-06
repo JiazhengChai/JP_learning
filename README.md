@@ -78,14 +78,14 @@ All app data is stored in the browser using IndexedDB. That means:
 
 ## Backup And Restore
 
-- Use Backup to save a plain JSON snapshot or an encrypted backup file.
+- Use Backup to save an encrypted backup file by default. Passphrases are optional, and plain JSON now requires an explicit warning confirmation.
 - On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving.
 - On browsers without a save or folder picker, LangLens falls back to the browser's normal download flow.
 - Encrypted backups keep the saved file unreadable without the passphrase.
 - Use Restore to inspect a backup before applying it.
 - Replace restore is best for full recovery on a new browser.
 - Merge restore is best for combining two libraries without wiping the current one.
-- On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and enable session auto-save.
+- On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and let LangLens auto-update one rolling encrypted latest-backup file after changes.
 - The backup center lets you choose the reminder threshold in days.
 - After upgrading older local databases, the dashboard shows a short migration notice pointing users to the new backup tools.
 
