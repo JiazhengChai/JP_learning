@@ -2056,6 +2056,13 @@ class App {
             await this.deleteSourceWithConfirm(source.id);
         });
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
+        view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
+            if (e.target.closest('.hl[data-hl-id], .hl-reading-note[data-note-id]')) return;
+            this.showEditSourceModal({
+                ...source,
+                tags: [...(source.tags || [])]
+            });
+        });
 
         view.querySelectorAll('.hl-list-item[data-hl-id]').forEach(item => {
             item.addEventListener('click', () => this.showHighlightDetailModal(parseInt(item.dataset.hlId, 10)));
