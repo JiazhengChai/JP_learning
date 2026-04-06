@@ -4,13 +4,14 @@
 ![Static Badge](https://img.shields.io/badge/storage-IndexedDB-0d1117?style=for-the-badge)
 ![Static Badge](https://img.shields.io/badge/runtime-browser%20only-0d1117?style=for-the-badge)
 
-LangLens is a focused language study workspace for learning from real text. Import material, capture vocabulary and grammar in context, and review it later with a lightweight spaced-repetition flow that stays entirely in your browser.
+LangLens is a focused language study workspace for learning from real text. Import material, capture study items with a simple text-plus-note flow, and review them later with a lightweight spaced-repetition flashcard loop that stays entirely in your browser.
 
 ## Highlights
 
 - Read from a personal library of imported texts.
-- Save vocabulary, grammar notes, and phrases while you study.
-- Review due items with a compact flashcard-style workflow.
+- Save study items with just an input text and note.
+- Group items into categories and keep metadata like added time and character count.
+- Review due items with a front/back flashcard workflow.
 - Export and import everything as JSON for easy backups.
 - Keep all data local with no backend or account required.
 
@@ -18,8 +19,8 @@ LangLens is a focused language study workspace for learning from real text. Impo
 
 - Dashboard: at-a-glance stats, recent activity, and due review count.
 - Library: organize sources and open them in the reader.
-- Vocabulary: browse saved items by type, mastery, and review state.
-- Review: study due cards and rate how well you know them.
+- Items: browse saved items by category, source, mastery, and review state.
+- Review: study prompt-only cards, flip for the note, then rate recall.
 
 ## Tech Stack
 
@@ -29,7 +30,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 
 ## Why It Feels Good To Use
 
-LangLens is designed around the reading loop rather than generic note-taking. The sidebar keeps navigation simple, the reader is built for fast selection and tagging, and the review system makes the stored items useful after the first pass.
+LangLens is designed around the reading loop rather than generic note-taking. The sidebar keeps navigation simple, adding an item is intentionally lightweight, and the review system makes the stored notes useful after the first pass.
 
 ## Run Locally
 

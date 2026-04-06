@@ -1,10 +1,10 @@
 /**
  * LangLens - IndexedDB Data Layer
- * Stores: sources (imported texts), highlights (saved vocab/grammar/phrases)
+ * Stores imported sources and saved study items.
  */
 
 const DB_NAME = 'LangLensDB';
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 class Database {
     constructor() {
@@ -17,21 +17,41 @@ class Database {
 
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
+                const tx = e.target.transaction;
 
                 if (!db.objectStoreNames.contains('sources')) {
-                    const s = db.createObjectStore('sources', { keyPath: 'id', autoIncrement: true });
-                    s.createIndex('createdAt', 'createdAt');
-                    s.createIndex('sourceType', 'sourceType');
-                    s.createIndex('language', 'language');
+                    const sourceStore = db.createObjectStore('sources', { keyPath: 'id', autoIncrement: true });
+                    sourceStore.createIndex('createdAt', 'createdAt');
+                    sourceStore.createIndex('sourceType', 'sourceType');
+                    sourceStore.createIndex('language', 'language');
                 }
 
+                let highlightStore;
                 if (!db.objectStoreNames.contains('highlights')) {
-                    const h = db.createObjectStore('highlights', { keyPath: 'id', autoIncrement: true });
-                    h.createIndex('sourceId', 'sourceId');
-                    h.createIndex('createdAt', 'createdAt');
-                    h.createIndex('nextReviewAt', 'nextReviewAt');
-                    h.createIndex('type', 'type');
-                    h.createIndex('masteryLevel', 'masteryLevel');
+                    highlightStore = db.createObjectStore('highlights', { keyPath: 'id', autoIncrement: true });
+                    highlightStore.createIndex('sourceId', 'sourceId');
+                    highlightStore.createIndex('createdAt', 'createdAt');
+                    highlightStore.createIndex('nextReviewAt', 'nextReviewAt');
+                    highlightStore.createIndex('type', 'type');
+                    highlightStore.createIndex('masteryLevel', 'masteryLevel');
+                } else {
+                    highlightStore = tx.objectStore('highlights');
+                }
+
+                if (!highlightStore.indexNames.contains('category')) {
+                    highlightStore.createIndex('category', 'category');
+                }
+                if (!highlightStore.indexNames.contains('charCount')) {
+                    highlightStore.createIndex('charCount', 'charCount');
+                }
+                if (!highlightStore.indexNames.contains('updatedAt')) {
+                    highlightStore.createIndex('updatedAt', 'updatedAt');
+                }
+
+                if (!db.objectStoreNames.contains('readingNotes')) {
+                    const notesStore = db.createObjectStore('readingNotes', { keyPath: 'id', autoIncrement: true });
+                    notesStore.createIndex('sourceId', 'sourceId');
+                    notesStore.createIndex('createdAt', 'createdAt');
                 }
             };
 
@@ -43,8 +63,6 @@ class Database {
             req.onerror = (e) => reject(e.target.error);
         });
     }
-
-    // === Generic helpers ===
 
     _store(name, mode) {
         const tx = this.db.transaction(name, mode);
@@ -59,74 +77,116 @@ class Database {
         });
     }
 
-    // === Sources ===
+    _normalizeCategory(value, tags = []) {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (raw) return raw;
+        if (Array.isArray(tags) && tags.length > 0) {
+            const firstTag = String(tags[0] || '').trim();
+            if (firstTag) return firstTag;
+        }
+        return 'vocab';
+    }
+
+    _normalizeHighlight(highlight = {}, opts = {}) {
+        const text = String(highlight.text || '').trim();
+        const note = String(highlight.note || highlight.reading || '').trim();
+        const createdAt = highlight.createdAt || Date.now();
+        const updatedAt = opts.touch ? Date.now() : (highlight.updatedAt || createdAt);
+        const category = this._normalizeCategory(highlight.category, highlight.tags);
+
+        return {
+            ...highlight,
+            text,
+            note,
+            type: highlight.type || 'vocab',
+            category,
+            createdAt,
+            updatedAt,
+            masteryLevel: Number.isFinite(highlight.masteryLevel) ? highlight.masteryLevel : 0,
+            easeFactor: Number.isFinite(highlight.easeFactor) ? highlight.easeFactor : 2.5,
+            interval: Number.isFinite(highlight.interval) ? highlight.interval : 0,
+            nextReviewAt: Number.isFinite(highlight.nextReviewAt) ? highlight.nextReviewAt : 0,
+            lastReviewedAt: Number.isFinite(highlight.lastReviewedAt) ? highlight.lastReviewedAt : 0,
+            reviewCount: Number.isFinite(highlight.reviewCount) ? highlight.reviewCount : 0,
+            charCount: Number.isFinite(highlight.charCount) ? highlight.charCount : text.length,
+            noteLength: Number.isFinite(highlight.noteLength) ? highlight.noteLength : note.length,
+            tags: Array.isArray(highlight.tags) ? highlight.tags.filter(Boolean) : []
+        };
+    }
+
+    _normalizeSource(source = {}, opts = {}) {
+        return {
+            ...source,
+            createdAt: source.createdAt || Date.now(),
+            updatedAt: opts.touch ? Date.now() : (source.updatedAt || source.createdAt || Date.now()),
+            tags: Array.isArray(source.tags) ? source.tags.filter(Boolean) : []
+        };
+    }
 
     async addSource(source) {
-        const s = this._store('sources', 'readwrite');
-        source.createdAt = source.createdAt || Date.now();
-        source.updatedAt = Date.now();
-        return this._req(s, 'add', source);
+        const store = this._store('sources', 'readwrite');
+        return this._req(store, 'add', this._normalizeSource(source, { touch: true }));
     }
 
     async getSource(id) {
-        const s = this._store('sources', 'readonly');
-        return this._req(s, 'get', id);
+        const store = this._store('sources', 'readonly');
+        return this._req(store, 'get', id);
     }
 
     async getAllSources() {
-        const s = this._store('sources', 'readonly');
-        return this._req(s, 'getAll');
+        const store = this._store('sources', 'readonly');
+        return this._req(store, 'getAll');
     }
 
     async updateSource(source) {
-        source.updatedAt = Date.now();
-        const s = this._store('sources', 'readwrite');
-        return this._req(s, 'put', source);
+        const store = this._store('sources', 'readwrite');
+        return this._req(store, 'put', this._normalizeSource(source, { touch: true }));
     }
 
     async deleteSource(id) {
-        const s = this._store('sources', 'readwrite');
-        await this._req(s, 'delete', id);
-        // Also delete associated highlights
+        const sourceStore = this._store('sources', 'readwrite');
+        await this._req(sourceStore, 'delete', id);
+
         const highlights = await this.getHighlightsBySource(id);
         if (highlights.length > 0) {
-            const hs = this._store('highlights', 'readwrite');
-            for (const h of highlights) {
-                hs.delete(h.id);
+            const highlightStore = this._store('highlights', 'readwrite');
+            for (const highlight of highlights) {
+                highlightStore.delete(highlight.id);
+            }
+        }
+
+        const notes = await this.getReadingNotesBySource(id);
+        if (notes.length > 0) {
+            const notesStore = this._store('readingNotes', 'readwrite');
+            for (const note of notes) {
+                notesStore.delete(note.id);
             }
         }
     }
 
-    // === Highlights ===
-
     async addHighlight(highlight) {
-        highlight.createdAt = highlight.createdAt || Date.now();
-        highlight.masteryLevel = highlight.masteryLevel || 0;
-        highlight.easeFactor = highlight.easeFactor || 2.5;
-        highlight.interval = highlight.interval || 0;
-        highlight.nextReviewAt = highlight.nextReviewAt || 0;
-        highlight.lastReviewedAt = highlight.lastReviewedAt || 0;
-        highlight.reviewCount = highlight.reviewCount || 0;
-        const s = this._store('highlights', 'readwrite');
-        return this._req(s, 'add', highlight);
+        const store = this._store('highlights', 'readwrite');
+        return this._req(store, 'add', this._normalizeHighlight(highlight, { touch: true }));
     }
 
     async getHighlight(id) {
-        const s = this._store('highlights', 'readonly');
-        return this._req(s, 'get', id);
+        const store = this._store('highlights', 'readonly');
+        const highlight = await this._req(store, 'get', id);
+        return highlight ? this._normalizeHighlight(highlight) : highlight;
     }
 
     async getAllHighlights() {
-        const s = this._store('highlights', 'readonly');
-        return this._req(s, 'getAll');
+        const store = this._store('highlights', 'readonly');
+        const highlights = await this._req(store, 'getAll');
+        return highlights.map(highlight => this._normalizeHighlight(highlight));
     }
 
     async getHighlightsBySource(sourceId) {
         return new Promise((resolve, reject) => {
-            const s = this._store('highlights', 'readonly');
-            const idx = s.index('sourceId');
+            const store = this._store('highlights', 'readonly');
+            const idx = store.index('sourceId');
             const req = idx.getAll(sourceId);
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => resolve(req.result.map(highlight => this._normalizeHighlight(highlight)));
             req.onerror = () => reject(req.error);
         });
     }
@@ -134,20 +194,52 @@ class Database {
     async getDueHighlights() {
         const all = await this.getAllHighlights();
         const now = Date.now();
-        return all.filter(h => !h.nextReviewAt || h.nextReviewAt <= now);
+        return all.filter(highlight => !highlight.nextReviewAt || highlight.nextReviewAt <= now);
     }
 
     async updateHighlight(highlight) {
-        const s = this._store('highlights', 'readwrite');
-        return this._req(s, 'put', highlight);
+        const store = this._store('highlights', 'readwrite');
+        return this._req(store, 'put', this._normalizeHighlight(highlight, { touch: true }));
     }
 
     async deleteHighlight(id) {
-        const s = this._store('highlights', 'readwrite');
-        return this._req(s, 'delete', id);
+        const store = this._store('highlights', 'readwrite');
+        return this._req(store, 'delete', id);
     }
 
-    // === Stats ===
+    // === Reading Notes ===
+    async addReadingNote(note) {
+        const store = this._store('readingNotes', 'readwrite');
+        return this._req(store, 'add', {
+            ...note,
+            createdAt: note.createdAt || Date.now()
+        });
+    }
+
+    async getReadingNotesBySource(sourceId) {
+        return new Promise((resolve, reject) => {
+            const store = this._store('readingNotes', 'readonly');
+            const idx = store.index('sourceId');
+            const req = idx.getAll(sourceId);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async getAllReadingNotes() {
+        const store = this._store('readingNotes', 'readonly');
+        return this._req(store, 'getAll');
+    }
+
+    async updateReadingNote(note) {
+        const store = this._store('readingNotes', 'readwrite');
+        return this._req(store, 'put', note);
+    }
+
+    async deleteReadingNote(id) {
+        const store = this._store('readingNotes', 'readwrite');
+        return this._req(store, 'delete', id);
+    }
 
     async getStats() {
         const sources = await this.getAllSources();
@@ -157,28 +249,26 @@ class Database {
         todayStart.setHours(0, 0, 0, 0);
         const ts = todayStart.getTime();
 
-        const due = highlights.filter(h => !h.nextReviewAt || h.nextReviewAt <= now);
-        const addedToday = highlights.filter(h => h.createdAt >= ts);
-        const reviewedToday = highlights.filter(h => h.lastReviewedAt >= ts);
+        const due = highlights.filter(highlight => !highlight.nextReviewAt || highlight.nextReviewAt <= now);
+        const addedToday = highlights.filter(highlight => highlight.createdAt >= ts);
+        const reviewedToday = highlights.filter(highlight => highlight.lastReviewedAt >= ts);
 
-        // Calculate streak: consecutive days with reviews going backward
         let streak = 0;
         if (reviewedToday.length > 0) streak = 1;
         const dayMs = 86400000;
         let checkDate = ts - dayMs;
         while (true) {
-            const hasReview = highlights.some(h =>
-                h.lastReviewedAt >= checkDate && h.lastReviewedAt < checkDate + dayMs
+            const hasReview = highlights.some(highlight =>
+                highlight.lastReviewedAt >= checkDate && highlight.lastReviewedAt < checkDate + dayMs
             );
             if (!hasReview) break;
             streak++;
             checkDate -= dayMs;
         }
 
-        // Mastery distribution
-        const mastery = [0, 0, 0, 0, 0, 0]; // levels 0-5
-        for (const h of highlights) {
-            mastery[h.masteryLevel || 0]++;
+        const mastery = [0, 0, 0, 0, 0, 0];
+        for (const highlight of highlights) {
+            mastery[highlight.masteryLevel || 0]++;
         }
 
         return {
@@ -192,16 +282,16 @@ class Database {
         };
     }
 
-    // === Export / Import ===
-
     async exportAll() {
         const sources = await this.getAllSources();
         const highlights = await this.getAllHighlights();
+        const readingNotes = await this.getAllReadingNotes();
         return {
             version: DB_VERSION,
             exportedAt: Date.now(),
             sources,
-            highlights
+            highlights,
+            readingNotes
         };
     }
 
@@ -210,7 +300,6 @@ class Database {
             throw new Error('Invalid import data format');
         }
 
-        // Clear existing data
         const clearStore = (name) => {
             return new Promise((resolve, reject) => {
                 const tx = this.db.transaction(name, 'readwrite');
@@ -222,22 +311,29 @@ class Database {
 
         await clearStore('sources');
         await clearStore('highlights');
+        await clearStore('readingNotes');
 
-        // Import sources
-        for (const src of data.sources) {
-            const s = this._store('sources', 'readwrite');
-            await this._req(s, 'put', src);
+        for (const source of data.sources) {
+            const store = this._store('sources', 'readwrite');
+            await this._req(store, 'put', this._normalizeSource(source));
         }
 
-        // Import highlights
-        for (const hl of data.highlights) {
-            const s = this._store('highlights', 'readwrite');
-            await this._req(s, 'put', hl);
+        for (const highlight of data.highlights) {
+            const store = this._store('highlights', 'readwrite');
+            await this._req(store, 'put', this._normalizeHighlight(highlight));
+        }
+
+        if (data.readingNotes) {
+            for (const note of data.readingNotes) {
+                const store = this._store('readingNotes', 'readwrite');
+                await this._req(store, 'put', note);
+            }
         }
 
         return {
             sources: data.sources.length,
-            highlights: data.highlights.length
+            highlights: data.highlights.length,
+            readingNotes: (data.readingNotes || []).length
         };
     }
 }

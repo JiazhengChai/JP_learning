@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
     <aside id="sidebar">
@@ -23,7 +24,7 @@
                 <span class="nav-icon">📚</span> Library
             </a>
             <a href="#" data-view="vocab" class="nav-link">
-                <span class="nav-icon">🔤</span> Vocabulary
+                <span class="nav-icon">🔤</span> Items
             </a>
             <a href="#" data-view="review" class="nav-link">
                 <span class="nav-icon">🧠</span> Review
@@ -31,8 +32,11 @@
             </a>
         </nav>
         <div class="sidebar-footer">
-            <button id="btn-export" class="btn-subtle" title="Export all data as JSON">⬇ Export</button>
-            <button id="btn-import" class="btn-subtle" title="Import data from JSON">⬆ Import</button>
+            <button id="btn-theme" class="theme-toggle" title="Toggle light/dark theme">🌙 Dark</button>
+            <div style="display:flex;gap:8px;">
+                <button id="btn-export" class="btn-subtle" title="Export all data as JSON">⬇ Export</button>
+                <button id="btn-import" class="btn-subtle" title="Import data from JSON">⬆ Import</button>
+            </div>
             <input type="file" id="import-file" accept=".json" hidden>
         </div>
     </aside>
@@ -52,9 +56,8 @@
 
     <!-- Floating Selection Toolbar -->
     <div id="selection-toolbar" class="selection-toolbar hidden">
-        <button data-type="vocab" class="st-btn st-vocab">📝 Vocab</button>
-        <button data-type="grammar" class="st-btn st-grammar">📐 Grammar</button>
-        <button data-type="phrase" class="st-btn st-phrase">💬 Phrase</button>
+        <button id="selection-save-item" class="st-btn st-save">📝 Save Item</button>
+        <button id="selection-add-note" class="st-btn st-note">📌 Add Note</button>
     </div>
 
     <!-- Toast -->
