@@ -1,5 +1,6 @@
 (function (globalScope) {
     const DEFAULT_BACKUP_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+    const SEALED_BACKUP_PREFIX = 'LLB2';
 
     class BackupUtils {
         static backupSummary(data = {}) {
@@ -107,6 +108,44 @@
             }, false, usages);
         }
 
+        static isLegacyEncryptedBackup(data) {
+            return !!(data?.encrypted && data?.payload && data?.encryption?.salt && data?.encryption?.iv);
+        }
+
+        static isSealedEncryptedBackup(data) {
+            return typeof data === 'string' && data.startsWith(`${SEALED_BACKUP_PREFIX}.`);
+        }
+
+        static isEncryptedBackup(data) {
+            return BackupUtils.isLegacyEncryptedBackup(data) || BackupUtils.isSealedEncryptedBackup(data);
+        }
+
+        static packSealedEncryptedBackup({ salt, iv, payload }) {
+            return [
+                SEALED_BACKUP_PREFIX,
+                BackupUtils.toBase64(salt),
+                BackupUtils.toBase64(iv),
+                BackupUtils.toBase64(payload)
+            ].join('.');
+        }
+
+        static unpackSealedEncryptedBackup(data) {
+            if (!BackupUtils.isSealedEncryptedBackup(data)) {
+                throw new Error('Invalid encrypted backup file');
+            }
+
+            const parts = String(data).split('.');
+            if (parts.length !== 4) {
+                throw new Error('Invalid encrypted backup file');
+            }
+
+            return {
+                salt: new Uint8Array(BackupUtils.fromBase64(parts[1])),
+                iv: new Uint8Array(BackupUtils.fromBase64(parts[2])),
+                payload: BackupUtils.fromBase64(parts[3])
+            };
+        }
+
         static async encryptBackupData(data, passphrase, cryptoImpl = globalScope.crypto, options = {}) {
             if (!passphrase) {
                 throw new Error('A passphrase is required for encrypted backups');
@@ -116,30 +155,44 @@
             const salt = options.salt ? new Uint8Array(options.salt) : cryptoImpl.getRandomValues(new Uint8Array(16));
             const iv = options.iv ? new Uint8Array(options.iv) : cryptoImpl.getRandomValues(new Uint8Array(12));
             const key = await BackupUtils.deriveKey(passphrase, salt, ['encrypt'], cryptoImpl);
-            const encoded = new TextEncoder().encode(JSON.stringify(data));
-            const encrypted = await cryptoImpl.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-
-            return {
+            const sealedPayload = {
                 format: 'langlens-backup',
                 backupVersion: summary.backupVersion || 1,
                 schemaVersion: summary.schemaVersion,
                 exportedAt: summary.exportedAt,
-                encrypted: true,
                 counts: summary.counts,
-                encryption: {
-                    algorithm: 'AES-GCM',
-                    kdf: 'PBKDF2',
-                    hash: 'SHA-256',
-                    iterations: 250000,
-                    salt: BackupUtils.toBase64(salt),
-                    iv: BackupUtils.toBase64(iv)
-                },
-                payload: BackupUtils.toBase64(encrypted)
+                data
             };
+            const encoded = new TextEncoder().encode(JSON.stringify(sealedPayload));
+            const encrypted = await cryptoImpl.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+
+            return BackupUtils.packSealedEncryptedBackup({ salt, iv, payload: encrypted });
         }
 
         static async decryptBackupData(data, passphrase, cryptoImpl = globalScope.crypto) {
-            if (!data?.encrypted || !data?.payload || !data?.encryption?.salt || !data?.encryption?.iv) {
+            if (BackupUtils.isSealedEncryptedBackup(data)) {
+                try {
+                    const encrypted = BackupUtils.unpackSealedEncryptedBackup(data);
+                    const key = await BackupUtils.deriveKey(passphrase, encrypted.salt, ['decrypt'], cryptoImpl);
+                    const decrypted = await cryptoImpl.subtle.decrypt({ name: 'AES-GCM', iv: encrypted.iv }, key, encrypted.payload);
+                    const text = new TextDecoder().decode(decrypted);
+                    const parsed = JSON.parse(text);
+                    if (parsed?.data && Array.isArray(parsed.data.sources) && Array.isArray(parsed.data.highlights)) {
+                        return parsed.data;
+                    }
+                    if (Array.isArray(parsed?.sources) && Array.isArray(parsed?.highlights)) {
+                        return parsed;
+                    }
+                    throw new Error('Invalid encrypted backup file');
+                } catch (err) {
+                    if (err?.message === 'Invalid encrypted backup file') {
+                        throw err;
+                    }
+                    throw new Error('Unable to decrypt backup. Check the passphrase and try again.');
+                }
+            }
+
+            if (!BackupUtils.isLegacyEncryptedBackup(data)) {
                 throw new Error('Invalid encrypted backup file');
             }
 
@@ -157,6 +210,7 @@
     }
 
     BackupUtils.DEFAULT_BACKUP_THRESHOLD_MS = DEFAULT_BACKUP_THRESHOLD_MS;
+    BackupUtils.SEALED_BACKUP_PREFIX = SEALED_BACKUP_PREFIX;
 
     globalScope.BackupUtils = BackupUtils;
 

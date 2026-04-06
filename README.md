@@ -72,7 +72,7 @@ All app data is stored in the browser using IndexedDB. That means:
 - persistent storage can reduce eviction risk on supported browsers,
 - exporting JSON is the safest way to back up your library,
 - encrypted backups can be restored on another browser or device,
-- encrypted backup files still expose wrapper metadata like export time and item counts, but not the library contents without the passphrase,
+- encrypted backup files are stored as sealed ciphertext, so the saved file does not expose your library contents without the passphrase,
 - folder backups are useful if you point them at a synced folder such as OneDrive.
 
 ## Backup And Restore
@@ -80,7 +80,7 @@ All app data is stored in the browser using IndexedDB. That means:
 - Use Backup to save a plain JSON snapshot or an encrypted backup file.
 - On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving.
 - On browsers without a save or folder picker, LangLens falls back to the browser's normal download flow.
-- Encrypted backups keep texts, study items, and notes unreadable without the passphrase, even though the JSON wrapper remains visible.
+- Encrypted backups keep the saved file unreadable without the passphrase.
 - Use Restore to inspect a backup before applying it.
 - Replace restore is best for full recovery on a new browser.
 - Merge restore is best for combining two libraries without wiping the current one.

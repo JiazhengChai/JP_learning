@@ -1538,15 +1538,18 @@ class App {
     }
 
     async showEncryptedRestoreModal(data, fileName) {
-        const summary = this.backupSummary(data);
+        const hasPreview = BackupUtils.isLegacyEncryptedBackup(data);
+        const summary = hasPreview ? this.backupSummary(data) : null;
         this.showModal(`
             <h3>Unlock Backup</h3>
             <div class="detail-stack">
                 <div class="backup-panel-title">Encrypted Backup</div>
                 <div class="backup-info-list">
                     <div class="backup-info-row"><span>File</span><strong>${this.esc(fileName || 'backup.json')}</strong></div>
-                    <div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
-                    <div class="backup-info-row"><span>Texts / Items / Notes</span><strong>${summary.counts.sources} / ${summary.counts.highlights} / ${summary.counts.readingNotes}</strong></div>
+                    ${hasPreview
+                        ? `<div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
+                    <div class="backup-info-row"><span>Texts / Items / Notes</span><strong>${summary.counts.sources} / ${summary.counts.highlights} / ${summary.counts.readingNotes}</strong></div>`
+                        : '<div class="backup-info-row"><span>Preview</span><strong>Hidden until the file is unlocked</strong></div>'}
                 </div>
             </div>
             <div class="form-group">
@@ -1639,7 +1642,7 @@ class App {
                         </label>
                         <label class="backup-radio-option">
                             <input type="radio" name="backup-format" value="encrypted">
-                            <span class="backup-radio-copy"><strong>Encrypted JSON</strong><span>Encrypts your texts, items, and notes. The wrapper JSON still shows basic metadata like export time and counts.</span></span>
+                            <span class="backup-radio-copy"><strong>Encrypted JSON</strong><span>Encrypts the entire backup file so the local contents stay unreadable without the passphrase.</span></span>
                         </label>
                     </div>
                 </div>
@@ -3544,7 +3547,7 @@ class App {
         try {
             const text = await file.text();
             const data = JSON.parse(text);
-            if (data?.encrypted) {
+            if (BackupUtils.isEncryptedBackup(data)) {
                 await this.showEncryptedRestoreModal(data, file.name);
                 return;
             }

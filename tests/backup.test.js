@@ -10,7 +10,7 @@ globalThis.IDBKeyRange = IDBKeyRange;
 const { Database, DB_NAME } = require('../js/db.js');
 const BackupUtils = require('../js/backup-utils.js');
 const plainFixture = require('./fixtures/plain-backup.json');
-const encryptedFixture = require('./fixtures/encrypted-backup.json');
+const legacyEncryptedFixture = require('./fixtures/encrypted-backup.json');
 
 async function deleteDatabase(name) {
     await new Promise((resolve, reject) => {
@@ -121,8 +121,17 @@ test('settings store persists structured values for backup preferences', async (
     db.db.close();
 });
 
-test('encrypted fixture decrypts and restores successfully', async () => {
-    const decrypted = await BackupUtils.decryptBackupData(encryptedFixture, 'langlens-fixture-passphrase', webcrypto);
+test('encrypted backups are sealed and decrypt successfully', async () => {
+    const encryptedBackup = await BackupUtils.encryptBackupData(plainFixture, 'langlens-fixture-passphrase', webcrypto, {
+        salt: Uint8Array.from([11, 22, 33, 44, 55, 66, 77, 88, 99, 111, 123, 135, 147, 159, 171, 183]),
+        iv: Uint8Array.from([201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212])
+    });
+
+    assert.equal(typeof encryptedBackup, 'string');
+    assert.match(encryptedBackup, new RegExp(`^${BackupUtils.SEALED_BACKUP_PREFIX}\\.`));
+    assert.doesNotMatch(encryptedBackup, /NHK Weather Note|good weather|readingNotes|highlights|sources/);
+
+    const decrypted = await BackupUtils.decryptBackupData(encryptedBackup, 'langlens-fixture-passphrase', webcrypto);
 
     assert.equal(decrypted.format, plainFixture.format);
     assert.equal(decrypted.sources[0].title, plainFixture.sources[0].title);
@@ -137,6 +146,15 @@ test('encrypted fixture decrypts and restores successfully', async () => {
     assert.equal(exported.sources[0].title, plainFixture.sources[0].title);
 
     db.db.close();
+});
+
+test('legacy encrypted fixture still decrypts successfully', async () => {
+    const decrypted = await BackupUtils.decryptBackupData(legacyEncryptedFixture, 'langlens-fixture-passphrase', webcrypto);
+
+    assert.equal(decrypted.format, plainFixture.format);
+    assert.equal(decrypted.sources[0].title, plainFixture.sources[0].title);
+    assert.equal(decrypted.highlights[0].note, plainFixture.highlights[0].note);
+    assert.equal(decrypted.readingNotes[0].text, plainFixture.readingNotes[0].text);
 });
 
 test('backup reminder helper flags missing and stale backups only when there is data', () => {
