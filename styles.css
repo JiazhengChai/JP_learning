@@ -281,7 +281,17 @@ nav { flex: 1; padding: 12px 0; }
     padding: 14px 16px;
     border-top: 1px solid var(--border);
     display: flex;
+    flex-direction: column;
     gap: 8px;
+}
+.sidebar-footer-actions {
+    display: flex;
+    gap: 8px;
+}
+.backup-footer-status {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.45;
 }
 .btn-subtle {
     flex: 1;
@@ -510,6 +520,8 @@ nav { flex: 1; padding: 12px 0; }
     line-height: 2;
     white-space: pre-wrap;
     word-wrap: break-word;
+    word-break: normal;
+    line-break: strict;
     font-family: var(--font-jp);
     padding: 16px 0;
     user-select: text;
@@ -741,6 +753,184 @@ nav { flex: 1; padding: 12px 0; }
     margin-bottom: 16px;
     color: var(--accent);
     word-break: break-all;
+}
+
+.backup-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 18px;
+}
+.backup-panel-title {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+}
+.backup-info-list {
+    display: grid;
+    gap: 10px;
+}
+.backup-info-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    font-size: 0.84rem;
+}
+.backup-info-row span {
+    color: var(--text-secondary);
+}
+.backup-info-row strong {
+    color: var(--text);
+    text-align: right;
+    font-weight: 600;
+}
+.backup-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+.backup-summary-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 12px;
+    text-align: center;
+}
+.backup-summary-card .value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text);
+}
+.backup-summary-card .label {
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+.backup-radio-group {
+    display: grid;
+    gap: 10px;
+}
+.backup-radio-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    cursor: pointer;
+}
+.backup-radio-option input {
+    width: auto;
+    margin-top: 2px;
+}
+.backup-radio-copy {
+    display: block;
+    flex: 1;
+}
+.backup-radio-copy strong {
+    display: block;
+    color: var(--text);
+    font-size: 0.85rem;
+}
+.backup-radio-copy span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.backup-inline-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+.backup-field-hint {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    margin-top: 8px;
+    line-height: 1.45;
+}
+.backup-folder-box {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+}
+.backup-checkbox {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--text);
+    font-size: 0.83rem;
+}
+.backup-checkbox input {
+    width: auto;
+    margin-top: 2px;
+}
+.backup-threshold-group {
+    margin-top: 16px;
+}
+.backup-reminder {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+}
+.backup-reminder-missing {
+    border-color: rgba(210, 153, 34, 0.35);
+    background: rgba(210, 153, 34, 0.08);
+}
+.backup-reminder-stale {
+    border-color: rgba(248, 81, 73, 0.35);
+    background: rgba(248, 81, 73, 0.08);
+}
+.backup-reminder-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.backup-reminder p {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+.migration-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding: 16px 18px;
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    border-radius: var(--radius-lg);
+    background: rgba(88, 166, 255, 0.08);
+}
+.migration-banner-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.migration-banner p {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+.migration-banner-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 /* === Vocab Bank Table === */
@@ -1081,6 +1271,17 @@ nav { flex: 1; padding: 12px 0; }
         position: static;
         max-height: none;
     }
+    .backup-grid {
+        grid-template-columns: 1fr;
+    }
+    .backup-reminder {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .migration-banner {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }
 @media (max-width: 768px) {
     #sidebar { width: 60px; }
@@ -1098,6 +1299,9 @@ nav { flex: 1; padding: 12px 0; }
     .recent-item {
         flex-wrap: wrap;
         align-items: flex-start;
+    }
+    .backup-summary-grid {
+        grid-template-columns: 1fr;
     }
 }
 

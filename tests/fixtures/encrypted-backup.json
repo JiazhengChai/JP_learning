@@ -1,0 +1,21 @@
+{
+  "format": "langlens-backup",
+  "backupVersion": 1,
+  "schemaVersion": 4,
+  "exportedAt": 1775457600000,
+  "encrypted": true,
+  "counts": {
+    "sources": 1,
+    "highlights": 1,
+    "readingNotes": 1
+  },
+  "encryption": {
+    "algorithm": "AES-GCM",
+    "kdf": "PBKDF2",
+    "hash": "SHA-256",
+    "iterations": 250000,
+    "salt": "CxYhLDdCTVhjb3uHk5+rtw==",
+    "iv": "ycrLzM3Oz9DR0tPU"
+  },
+  "payload": "9jOWlmrcUYcfbYQQqm2g5n+y20vhsSWsLPgmJ5bcznGSvdMrgvvMl48dfGhfkhaExlJm8iUUqYo4MF4Okl8Ue60rdOdojsj1pJXaryfEh9NOzF7nfEMKYvcT9e8DKF2Igye95u7oP9CsANZsTqwmyebbQToarSY8nL6xZZWt6JICUsh7HVk8VLqSg+LRy7VHvcQqgh5IpbyIUt1mCoMyDwAGljRm6bRuzDK2UDB61bwMMVQ1bZcO1nE683Ufh5UZX2PrMsNeiiQA6hEXp7q1oE+DdIOvFHkjMDVI1qYHhlBLz5+ioRHd+6e8RKwF5/SjB/DoYyAAJDBWkkS60hcq2n9eiCTf5v7H17wEc9CY3PZhT/WJLb970JlKhoa6NRvOh1+WDiMax7HG2dbX0hcmWPj2nk/wG3VCtAvoQ7eqhBT8e2Uhkgo6OWoh+VRLD9sRboIhTwZaPrz+RqH1H1m1sT/VI3dirIOQXGJVx7pmFtV3t8x7/ZfSU0Qhpc6WN3scwcSBaYRHmfNdq/z4j+jPM+lESiF0LvFvcc0ZRgGKPu05LkPrpR7GrKA0v7d7m6pmGOjrdMMzuAL7zvDo3fk1kInJ+Q2EJlivygCgV073EbLnNcc699QnbIfbGac/rpUTxMc9lq7lp4Y55UfyHSSuAU69dn04sY4/ynimCHw9FVtszBEosRIrQhQl1diqEDCXDCnXxuT0MiJYS7Ur6IOYhFTrJypp1ZyGmJyNr2yxaJC+eB8OICRv72sorTfsXfdz9x1ZCF+mUBTgEs1seTenNaLOGJ/eD9XjeIaYlhk3fS6Mbymp+rJSslAz4fDIbJcbU/0FCP7+T9UlVhCi85ZcnujcuaUHv+bzrj7wglsm3qBrtYnwsFsWKf6KpsJyV45LYXbDMDS5fTAhKJOlZoWkVC+JWIIjXZvJczOIEE4hYROZ3LMY/V0AmE0cpSyrEXtUEzCi0xda+WsCrAIVF4Kk7tHPWuiEI5XHhokY8FyXyfVJa55GuRGh5yUpzgH76Mgz/WCcVKw/QfUiFTbrwVCn+6/IVE4GKYss5RjZRE55V3WBwNKo246U1pgCZgNPjrf6JV0ks1XM/Y6iVTPp6t6jrdmw0jAdmrvXGeolFMEBDVl4v84xsSsnloJVVBTCeLb2uvVVAs8lWpFMiALEK3vNqi7k5pLFwisqRYreJglOg6ow6anW4wiJ8nM/Qk9ELtEaOGewT9IP9P+HgB1wA7QohPuBuIzTqhzOh+pUo17CsctVUyQjv91dvqLAyZGnUNqV3epQ/Lb3mDKO9nlQeKeb9sTs0dOkiEJV9IbRiNLOVrw6OwgVBflQbA=="
+}

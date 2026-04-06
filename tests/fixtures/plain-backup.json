@@ -1,0 +1,65 @@
+{
+  "format": "langlens-backup",
+  "backupVersion": 1,
+  "version": 4,
+  "schemaVersion": 4,
+  "exportedAt": 1775457600000,
+  "sources": [
+    {
+      "id": 1,
+      "title": "NHK Weather Note",
+      "content": "今日はいい天気です。勉強を続けます。",
+      "sourceType": "article",
+      "language": "Japanese",
+      "tags": [
+        "N5",
+        "weather"
+      ],
+      "createdAt": 1775454000000,
+      "updatedAt": 1775454000000
+    }
+  ],
+  "highlights": [
+    {
+      "id": 1,
+      "sourceId": 1,
+      "text": "いい天気",
+      "note": "good weather",
+      "type": "vocab",
+      "category": "vocab",
+      "createdAt": 1775454300000,
+      "updatedAt": 1775454300000,
+      "masteryLevel": 2,
+      "easeFactor": 2.5,
+      "interval": 3,
+      "nextReviewAt": 1775713500000,
+      "lastReviewedAt": 1775454300000,
+      "reviewCount": 1,
+      "charCount": 4,
+      "noteLength": 12,
+      "tags": [
+        "weather"
+      ],
+      "startOffset": 3,
+      "endOffset": 7,
+      "context": "今日はいい天気です。"
+    }
+  ],
+  "readingNotes": [
+    {
+      "id": 1,
+      "sourceId": 1,
+      "text": "勉強を続けます",
+      "note": "Shows a continuing action.",
+      "color": "blue",
+      "startOffset": 9,
+      "endOffset": 16,
+      "createdAt": 1775454600000
+    }
+  ],
+  "counts": {
+    "sources": 1,
+    "highlights": 1,
+    "readingNotes": 1
+  }
+}

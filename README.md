@@ -13,6 +13,10 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Group items into categories and keep metadata like added time and character count.
 - Review due items with a front/back flashcard workflow.
 - Export and import everything as JSON for easy backups.
+- Create encrypted backups and restore them later with a passphrase.
+- Request persistent browser storage and optionally save rolling backups to a folder.
+- Get a dashboard reminder when your local-first library has no recent backup.
+- Configure how quickly backup reminders appear and trigger a one-click backup from the dashboard.
 - Keep all data local with no backend or account required.
 
 ## Screens
@@ -46,6 +50,13 @@ python -m http.server 8000
 
 Then open `http://localhost:8000`.
 
+## Run Tests
+
+```bash
+npm install
+npm test
+```
+
 ## Preview
 
 If you add screenshots later, this is a good place to show the dashboard, reader, and review flow. A single full-width screenshot or a short 2-3 image strip will work well here.
@@ -56,7 +67,20 @@ All app data is stored in the browser using IndexedDB. That means:
 
 - data stays on the current device and browser profile,
 - clearing site data removes everything,
-- exporting JSON is the safest way to back up your library.
+- persistent storage can reduce eviction risk on supported browsers,
+- exporting JSON is the safest way to back up your library,
+- encrypted backups can be restored on another browser or device,
+- folder backups are useful if you point them at a synced folder such as OneDrive.
+
+## Backup And Restore
+
+- Use Backup to download a plain JSON snapshot or an encrypted backup file.
+- Use Restore to inspect a backup before applying it.
+- Replace restore is best for full recovery on a new browser.
+- Merge restore is best for combining two libraries without wiping the current one.
+- On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and enable session auto-save.
+- The backup center lets you choose the reminder threshold in days.
+- After upgrading older local databases, the dashboard shows a short migration notice pointing users to the new backup tools.
 
 ## Project Structure
 

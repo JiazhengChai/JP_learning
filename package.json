@@ -1,0 +1,11 @@
+{
+  "name": "langlens",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.2"
+  }
+}

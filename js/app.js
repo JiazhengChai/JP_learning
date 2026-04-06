@@ -10,28 +10,52 @@ class App {
         this.currentSource = null;
         this.reviewSession = null;
         this.reviewFilterCategory = '';
+        this.backupState = {
+            storageSupported: typeof navigator !== 'undefined' && !!navigator.storage,
+            persistSupported: typeof navigator !== 'undefined' && !!navigator.storage?.persist,
+            persisted: false,
+            usage: 0,
+            quota: 0,
+            fsAccessSupported: typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function',
+            folderHandle: null,
+            folderName: '',
+            folderPermission: 'prompt',
+            autoSaveEnabled: localStorage.getItem('langlens-backup-auto-save') === 'true',
+            backupThresholdMs: typeof BackupUtils !== 'undefined' ? BackupUtils.DEFAULT_BACKUP_THRESHOLD_MS : 7 * 24 * 60 * 60 * 1000,
+            lastBackupAt: Number(localStorage.getItem('langlens-last-backup-at')) || 0,
+            lastBackupMethod: localStorage.getItem('langlens-last-backup-method') || ''
+        };
         this._pendingSelection = null;
         this._selectionHandler = null;
         this._toastTimer = null;
+        this._autoBackupTimer = null;
+        this.migrationNotice = null;
     }
 
     async init() {
         await this.db.init();
         this.loadTheme();
         this.bindEvents();
-        this.navigate('dashboard');
-        this.updateReviewBadge();
+        await this.restoreBackupPreferences();
+        await this.restoreMigrationNotice();
+        await this.refreshBackupState();
+        const initialRoute = this.parseRoute();
+        await this.navigate(initialRoute.view, {
+            ...initialRoute,
+            replaceHistory: true
+        });
+        await this.updateReviewBadge();
     }
 
     loadTheme() {
-        const saved = localStorage.getItem('langlens-theme') || 'dark';
+        const saved = localStorage.getItem('langlens-theme') || 'light';
         document.documentElement.setAttribute('data-theme', saved);
         this.updateThemeButton(saved);
     }
 
     toggleTheme() {
-        const current = document.documentElement.getAttribute('data-theme') || 'dark';
-        const next = current === 'dark' ? 'light' : 'dark';
+        const current = document.documentElement.getAttribute('data-theme') || 'light';
+        const next = current === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', next);
         localStorage.setItem('langlens-theme', next);
         this.updateThemeButton(next);
@@ -96,6 +120,18 @@ class App {
         return ['New', 'Learning', 'Familiar', 'Known', 'Strong', 'Mastered'][level] || 'New';
     }
 
+    formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let value = bytes;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex++;
+        }
+        return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+    }
+
     showToast(msg, type = '') {
         const toast = document.getElementById('toast');
         toast.textContent = msg;
@@ -123,6 +159,103 @@ class App {
         return content.substring(cs, ce).trim();
     }
 
+    isCjkChar(char) {
+        return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(char || '');
+    }
+
+    shouldSkipPdfSpacing(previousText, nextText) {
+        const prevChar = previousText.slice(-1);
+        const nextChar = nextText.charAt(0);
+
+        if (!prevChar || !nextChar) return true;
+        if (/\s/.test(prevChar) || /\s/.test(nextChar)) return true;
+        if (this.isCjkChar(prevChar) || this.isCjkChar(nextChar)) return true;
+        if (/[([{/'"“‘]/.test(prevChar)) return true;
+        if (/[)\]},.!?:;%/'"”’、。！？：；]/.test(nextChar)) return true;
+
+        return false;
+    }
+
+    getPdfItemMetrics(item) {
+        const rawText = typeof item?.str === 'string' ? item.str.replace(/\u00a0/g, ' ') : '';
+        const text = rawText.trim();
+        const transform = Array.isArray(item?.transform) ? item.transform : [];
+        const x = Number(transform[4]) || 0;
+        const y = Number(transform[5]) || 0;
+        const width = Math.abs(Number(item?.width)) || 0;
+        const height = Math.abs(Number(item?.height)) || Math.abs(Number(transform[3])) || 0;
+
+        return {
+            text,
+            x,
+            y,
+            width,
+            height,
+            endX: x + width,
+            avgCharWidth: text ? Math.max(width / text.length, 1) : Math.max(width, 1),
+            hasEOL: !!item?.hasEOL
+        };
+    }
+
+    getPdfBreakCount(previous, current) {
+        const lineHeight = Math.max(previous.height, current.height, 1);
+        const yDelta = Math.abs(current.y - previous.y);
+
+        if (previous.hasEOL) {
+            return yDelta > lineHeight * 1.6 ? 2 : 1;
+        }
+
+        if (yDelta <= lineHeight * 0.55) {
+            return 0;
+        }
+
+        return yDelta > lineHeight * 1.6 ? 2 : 1;
+    }
+
+    shouldInsertPdfSpace(previous, current) {
+        if (this.shouldSkipPdfSpacing(previous.text, current.text)) {
+            return false;
+        }
+
+        const gapX = current.x - previous.endX;
+        const threshold = Math.max(previous.avgCharWidth, current.avgCharWidth, 1) * 0.3;
+        return gapX > threshold;
+    }
+
+    extractPdfPageText(textContent) {
+        const items = Array.isArray(textContent?.items)
+            ? textContent.items.map(item => this.getPdfItemMetrics(item)).filter(item => item.text)
+            : [];
+
+        if (items.length === 0) {
+            return '';
+        }
+
+        let text = items[0].text;
+
+        for (let i = 1; i < items.length; i++) {
+            const previous = items[i - 1];
+            const current = items[i];
+            const breakCount = this.getPdfBreakCount(previous, current);
+
+            if (breakCount > 0) {
+                text = text.replace(/[ \t]+$/, '');
+                text += '\n'.repeat(breakCount);
+            } else if (this.shouldInsertPdfSpace(previous, current)) {
+                text += ' ';
+            }
+
+            text += current.text;
+        }
+
+        return text
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n[ \t]+/g, '\n')
+            .replace(/([A-Za-z])\-\n([A-Za-z])/g, '$1$2')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
     getUniqueCategories(items) {
         return [...new Set(items.map(item => (item.category || 'General').trim()).filter(Boolean))]
             .sort((a, b) => a.localeCompare(b));
@@ -134,11 +267,73 @@ class App {
         return source ? source.title : 'Source';
     }
 
+    getRouteState(viewName = this.currentView, options = {}) {
+        const state = { view: viewName || 'dashboard' };
+        const sourceId = Number.parseInt(options.sourceId ?? this.currentSource?.id, 10);
+        if (state.view === 'reader' && Number.isFinite(sourceId)) {
+            state.sourceId = sourceId;
+        }
+        return state;
+    }
+
+    routeForState(state = {}) {
+        if (state.view === 'reader' && Number.isFinite(state.sourceId)) {
+            return `#reader/${state.sourceId}`;
+        }
+        return `#${state.view || 'dashboard'}`;
+    }
+
+    parseRoute() {
+        const hash = (window.location.hash || '').replace(/^#\/?/, '');
+        if (!hash) {
+            return { view: 'dashboard' };
+        }
+
+        const [view, rawSourceId] = hash.split('/');
+        if (view === 'reader') {
+            const sourceId = Number.parseInt(rawSourceId, 10);
+            if (Number.isFinite(sourceId)) {
+                return { view, sourceId };
+            }
+            return { view: 'library' };
+        }
+
+        if (['dashboard', 'library', 'vocab', 'review'].includes(view)) {
+            return { view };
+        }
+
+        return { view: 'dashboard' };
+    }
+
+    syncHistoryState(state, { replace = false } = {}) {
+        if (!window.history?.pushState) return;
+
+        const route = this.routeForState(state);
+        const currentState = window.history.state || {};
+        if (window.location.hash === route && currentState.view === state.view && currentState.sourceId === state.sourceId) {
+            return;
+        }
+
+        const method = replace ? 'replaceState' : 'pushState';
+        window.history[method](state, '', route);
+    }
+
     bindEvents() {
         document.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 this.navigate(link.dataset.view);
+            });
+        });
+
+        window.addEventListener('popstate', (e) => {
+            const state = e.state?.view ? e.state : this.parseRoute();
+            this.navigate(state.view, {
+                ...state,
+                updateHistory: false,
+                silentMissingSource: true
+            }).catch(err => {
+                console.error('Failed to restore navigation state:', err);
             });
         });
 
@@ -194,7 +389,7 @@ class App {
         });
 
         document.getElementById('btn-theme')?.addEventListener('click', () => this.toggleTheme());
-        document.getElementById('btn-export').addEventListener('click', () => this.exportData());
+        document.getElementById('btn-export').addEventListener('click', () => this.showBackupCenter());
         document.getElementById('btn-import').addEventListener('click', () => {
             document.getElementById('import-file').click();
         });
@@ -209,32 +404,72 @@ class App {
         this._pendingSelection = null;
     }
 
-    navigate(viewName) {
-        this.currentView = viewName;
+    async navigate(viewName, options = {}) {
+        const allowedViews = new Set(['dashboard', 'library', 'reader', 'vocab', 'review']);
+        const targetView = allowedViews.has(viewName) ? viewName : 'dashboard';
+        let routeState = this.getRouteState(targetView, options);
+
+        if (targetView === 'reader') {
+            const sourceId = Number.parseInt(routeState.sourceId, 10);
+            if (!Number.isFinite(sourceId)) {
+                return this.navigate('library', {
+                    updateHistory: options.updateHistory,
+                    replaceHistory: options.replaceHistory,
+                    silentMissingSource: options.silentMissingSource
+                });
+            }
+
+            const source = await this.db.getSource(sourceId);
+            if (!source) {
+                if (!options.silentMissingSource) {
+                    this.showToast('Source not found', 'error');
+                }
+                return this.navigate('library', {
+                    updateHistory: options.updateHistory,
+                    replaceHistory: options.replaceHistory,
+                    silentMissingSource: true
+                });
+            }
+
+            this.currentSource = source;
+            routeState = this.getRouteState(targetView, { sourceId: source.id });
+        }
+
+        this.currentView = targetView;
 
         document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
-        const active = document.querySelector(`.nav-link[data-view="${viewName}"]`);
+        const active = document.querySelector(`.nav-link[data-view="${targetView === 'reader' ? 'library' : targetView}"]`);
         if (active) active.classList.add('active');
 
         document.querySelectorAll('.view').forEach(view => {
             view.classList.remove('active');
             view.classList.add('hidden');
         });
-        const view = document.getElementById(`view-${viewName}`);
+        const view = document.getElementById(`view-${targetView}`);
         if (view) {
             view.classList.remove('hidden');
             view.classList.add('active');
         }
 
-        if (viewName !== 'reader' && this._selectionHandler) {
+        if (targetView !== 'reader' && this._selectionHandler) {
             document.removeEventListener('mouseup', this._selectionHandler);
             this._selectionHandler = null;
         }
 
-        if (viewName === 'dashboard') this.renderDashboard();
-        if (viewName === 'library') this.renderLibrary();
-        if (viewName === 'vocab') this.renderVocab();
-        if (viewName === 'review') this.renderReviewSetup();
+        if (options.updateHistory !== false) {
+            this.syncHistoryState(routeState, { replace: !!options.replaceHistory });
+        }
+
+        try {
+            if (targetView === 'dashboard') await this.renderDashboard();
+            if (targetView === 'library') await this.renderLibrary();
+            if (targetView === 'reader') await this.renderReader();
+            if (targetView === 'vocab') await this.renderVocab();
+            if (targetView === 'review') await this.renderReviewSetup();
+        } catch (err) {
+            console.error(`Failed to render ${targetView}:`, err);
+            this.showToast(`Unable to open ${targetView}`, 'error');
+        }
 
         document.getElementById('main').scrollTop = 0;
     }
@@ -262,16 +497,672 @@ class App {
         }
     }
 
+    backupMethodLabel(method) {
+        return {
+            download: 'downloaded',
+            'download-encrypted': 'downloaded (encrypted)',
+            folder: 'saved to folder',
+            'folder-encrypted': 'saved to folder (encrypted)',
+            'folder-auto': 'auto-saved to folder'
+        }[method] || 'saved';
+    }
+
+    updateBackupFooter() {
+        const node = document.getElementById('backup-footer-status');
+        if (!node) return;
+
+        const storageLine = this.backupState.persistSupported
+            ? (this.backupState.persisted ? 'Persistent storage enabled' : 'Persistent storage not granted')
+            : 'Persistent storage unavailable';
+        const backupLine = this.backupState.lastBackupAt
+            ? `Last backup ${this.relativeTime(this.backupState.lastBackupAt)} via ${this.backupMethodLabel(this.backupState.lastBackupMethod)}`
+            : 'No backup saved yet';
+        const folderLine = this.backupState.folderHandle
+            ? `Folder backup: ${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
+            : 'Folder backup not configured';
+
+        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div>`;
+    }
+
+    async refreshBackupState() {
+        const storage = typeof navigator !== 'undefined' ? navigator.storage : null;
+        this.backupState.storageSupported = !!storage;
+        this.backupState.persistSupported = !!storage?.persist;
+
+        if (storage?.persisted) {
+            try {
+                this.backupState.persisted = await storage.persisted();
+            } catch {
+                this.backupState.persisted = false;
+            }
+        }
+
+        if (storage?.estimate) {
+            try {
+                const estimate = await storage.estimate();
+                this.backupState.usage = estimate.usage || 0;
+                this.backupState.quota = estimate.quota || 0;
+            } catch {
+                this.backupState.usage = 0;
+                this.backupState.quota = 0;
+            }
+        }
+
+        if (this.backupState.folderHandle) {
+            this.backupState.folderPermission = await this.getFolderPermission(this.backupState.folderHandle, false);
+            if (this.backupState.folderPermission !== 'granted') {
+                this.backupState.autoSaveEnabled = false;
+                this.persistAutoSavePreference();
+            }
+        }
+
+        this.updateBackupFooter();
+        return this.backupState;
+    }
+
+    persistAutoSavePreference() {
+        localStorage.setItem('langlens-backup-auto-save', String(!!this.backupState.autoSaveEnabled));
+    }
+
+    async restoreBackupPreferences() {
+        const thresholdDays = await this.db.getSetting('backup-reminder-days');
+        if (Number.isFinite(thresholdDays) && thresholdDays > 0) {
+            this.backupState.backupThresholdMs = thresholdDays * 24 * 60 * 60 * 1000;
+        }
+
+        if (!this.backupState.fsAccessSupported) return;
+
+        try {
+            const handle = await this.db.getSetting('backup-folder-handle');
+            if (!handle) return;
+
+            this.backupState.folderHandle = handle;
+            this.backupState.folderName = handle.name || 'selected folder';
+            this.backupState.folderPermission = await this.getFolderPermission(handle, false);
+            if (this.backupState.folderPermission !== 'granted') {
+                this.backupState.autoSaveEnabled = false;
+                this.persistAutoSavePreference();
+            }
+        } catch {
+            this.backupState.folderHandle = null;
+            this.backupState.folderName = '';
+            this.backupState.folderPermission = 'prompt';
+            this.backupState.autoSaveEnabled = false;
+            this.persistAutoSavePreference();
+        }
+    }
+
+    async restoreMigrationNotice() {
+        try {
+            this.migrationNotice = await this.db.getSetting('migration-notice');
+        } catch {
+            this.migrationNotice = null;
+        }
+    }
+
+    backupThresholdDays() {
+        return Math.max(1, Math.round(this.backupState.backupThresholdMs / (24 * 60 * 60 * 1000)));
+    }
+
+    async setBackupThresholdDays(days) {
+        const normalizedDays = Math.max(1, Number.parseInt(days, 10) || 7);
+        this.backupState.backupThresholdMs = normalizedDays * 24 * 60 * 60 * 1000;
+        await this.db.setSetting('backup-reminder-days', normalizedDays);
+    }
+
+    async dismissMigrationNotice() {
+        await this.db.deleteSetting('migration-notice');
+        this.migrationNotice = null;
+        if (this.currentView === 'dashboard') {
+            await this.renderDashboard();
+        }
+    }
+
+    async getFolderPermission(handle, prompt = false) {
+        if (!handle) return 'denied';
+
+        try {
+            if (typeof handle.queryPermission === 'function') {
+                const descriptor = { mode: 'readwrite' };
+                let permission = await handle.queryPermission(descriptor);
+                if (permission !== 'granted' && prompt && typeof handle.requestPermission === 'function') {
+                    permission = await handle.requestPermission(descriptor);
+                }
+                return permission;
+            }
+            return 'granted';
+        } catch {
+            return 'denied';
+        }
+    }
+
+    async setBackupFolderHandle(handle) {
+        if (!handle) {
+            await this.clearBackupFolderHandle();
+            return;
+        }
+
+        await this.db.setSetting('backup-folder-handle', handle);
+        this.backupState.folderHandle = handle;
+        this.backupState.folderName = handle.name || 'selected folder';
+        this.backupState.folderPermission = await this.getFolderPermission(handle, false);
+        this.updateBackupFooter();
+    }
+
+    async clearBackupFolderHandle() {
+        try {
+            await this.db.deleteSetting('backup-folder-handle');
+        } catch {
+            // Ignore cleanup failures and reset local state anyway.
+        }
+
+        this.backupState.folderHandle = null;
+        this.backupState.folderName = '';
+        this.backupState.folderPermission = 'prompt';
+        this.backupState.autoSaveEnabled = false;
+        this.persistAutoSavePreference();
+        this.updateBackupFooter();
+    }
+
+    recordBackupEvent(method) {
+        this.backupState.lastBackupAt = Date.now();
+        this.backupState.lastBackupMethod = method;
+        localStorage.setItem('langlens-last-backup-at', String(this.backupState.lastBackupAt));
+        localStorage.setItem('langlens-last-backup-method', method);
+        this.updateBackupFooter();
+    }
+
+    getBackupFileName({ encrypted = false, latest = false } = {}) {
+        if (latest) {
+            return `langlens-latest-backup${encrypted ? '-encrypted' : ''}.json`;
+        }
+
+        const stamp = new Date().toISOString().replace(/[:]/g, '-').replace(/\.\d+Z$/, 'Z').replace('T', '_');
+        return `langlens-backup-${stamp}${encrypted ? '-encrypted' : ''}.json`;
+    }
+
+    downloadText(text, fileName) {
+        const blob = new Blob([text], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    backupSummary(data = {}) {
+        return BackupUtils.backupSummary(data);
+    }
+
+    async encryptBackupData(data, passphrase) {
+        return BackupUtils.encryptBackupData(data, passphrase);
+    }
+
+    async decryptBackupData(data, passphrase) {
+        return BackupUtils.decryptBackupData(data, passphrase);
+    }
+
+    async createBackupPackage(options = {}) {
+        const payload = await this.db.exportAll();
+        if (options.encrypted) {
+            if (!options.passphrase) throw new Error('A passphrase is required for encrypted backups');
+            return this.encryptBackupData(payload, options.passphrase);
+        }
+        return payload;
+    }
+
+    async ensureBackupFolder() {
+        if (!this.backupState.fsAccessSupported) {
+            throw new Error('Folder backups require a Chromium-based browser');
+        }
+
+        if (this.backupState.folderHandle) {
+            this.backupState.folderPermission = await this.getFolderPermission(this.backupState.folderHandle, true);
+            if (this.backupState.folderPermission === 'granted') {
+                this.updateBackupFooter();
+                return this.backupState.folderHandle;
+            }
+        }
+
+        try {
+            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            if (!handle) return null;
+
+            await this.setBackupFolderHandle(handle);
+            this.backupState.folderPermission = await this.getFolderPermission(handle, true);
+            this.updateBackupFooter();
+            return this.backupState.folderPermission === 'granted' ? handle : null;
+        } catch (err) {
+            if (err?.name === 'AbortError') return null;
+            throw err;
+        }
+    }
+
+    async writeBackupToFolder(options = {}) {
+        const handle = options.promptForDirectory === false
+            ? (await this.getFolderPermission(this.backupState.folderHandle, false)) === 'granted' ? this.backupState.folderHandle : null
+            : await this.ensureBackupFolder();
+        if (!handle) return false;
+
+        const backup = await this.createBackupPackage({
+            encrypted: !!options.encrypted,
+            passphrase: options.passphrase || ''
+        });
+        const fileName = this.getBackupFileName({
+            encrypted: !!options.encrypted,
+            latest: !!options.useLatestName
+        });
+        const fileHandle = await handle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(backup, null, backup.encrypted ? 0 : 2));
+        await writable.close();
+
+        this.recordBackupEvent(options.encrypted ? (options.useLatestName ? 'folder-auto' : 'folder-encrypted') : (options.useLatestName ? 'folder-auto' : 'folder'));
+        if (!options.quiet) {
+            this.showToast(`Backup saved to folder as ${fileName}`, 'success');
+        }
+        return true;
+    }
+
+    async createLatestBackupNow() {
+        await this.refreshBackupState();
+
+        if (this.backupState.folderHandle && await this.getFolderPermission(this.backupState.folderHandle, false) === 'granted') {
+            await this.writeBackupToFolder({ useLatestName: true, promptForDirectory: false });
+            return;
+        }
+
+        await this.exportData({ encrypted: false });
+    }
+
+    scheduleAutoBackup(reason = 'data change') {
+        if (!this.backupState.autoSaveEnabled || !this.backupState.folderHandle) return;
+        clearTimeout(this._autoBackupTimer);
+        this._autoBackupTimer = setTimeout(async () => {
+            try {
+                await this.writeBackupToFolder({ quiet: true, useLatestName: true, promptForDirectory: false });
+            } catch (err) {
+                this.backupState.autoSaveEnabled = false;
+                this.persistAutoSavePreference();
+                this.updateBackupFooter();
+                this.showToast(`Auto-backup paused after ${reason}: ${err.message}`, 'error');
+            }
+        }, 1200);
+    }
+
+    async requestPersistentStorage() {
+        if (!navigator.storage?.persist) {
+            throw new Error('Persistent storage is not supported in this browser');
+        }
+
+        const granted = await navigator.storage.persist();
+        await this.refreshBackupState();
+        if (!granted) {
+            throw new Error('Persistent storage was not granted');
+        }
+        return true;
+    }
+
+    describeImportResult(result) {
+        if (result.mode === 'merge') {
+            const changedSources = result.sources.added + result.sources.updated;
+            const changedHighlights = result.highlights.added + result.highlights.updated;
+            const changedNotes = result.readingNotes.added + result.readingNotes.updated;
+            const skipped = result.sources.skipped + result.highlights.skipped + result.readingNotes.skipped;
+            return `Merge complete: ${changedSources} texts, ${changedHighlights} items, ${changedNotes} notes added or refreshed${skipped > 0 ? `; ${skipped} duplicates skipped` : ''}.`;
+        }
+
+        return `Restore complete: ${result.sources.added} texts, ${result.highlights.added} items, ${result.readingNotes.added} notes loaded.`;
+    }
+
+    async applyImportedBackup(data, mode) {
+        const result = await this.db.importAll(data, { mode });
+        this.currentSource = null;
+        this.reviewSession = null;
+        this.closeModal();
+        await this.refreshBackupState();
+        await this.updateReviewBadge();
+        await this.navigate('dashboard');
+        this.scheduleAutoBackup('restore');
+        this.showToast(this.describeImportResult(result), 'success');
+    }
+
+    async showRestoreConfirmModal(data, opts = {}) {
+        const summary = this.backupSummary(data);
+        this.showModal(`
+            <h3>Restore Backup</h3>
+            <div class="backup-grid">
+                <div class="detail-stack">
+                    <div class="backup-panel-title">Backup File</div>
+                    <div class="backup-info-list">
+                        <div class="backup-info-row"><span>File</span><strong>${this.esc(opts.fileName || 'backup.json')}</strong></div>
+                        <div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
+                        <div class="backup-info-row"><span>Schema</span><strong>DB v${summary.schemaVersion || '—'}</strong></div>
+                        <div class="backup-info-row"><span>Type</span><strong>${opts.encrypted ? 'Encrypted backup' : 'Plain JSON backup'}</strong></div>
+                    </div>
+                </div>
+                <div class="detail-stack">
+                    <div class="backup-panel-title">Backup Contents</div>
+                    <div class="backup-summary-grid">
+                        <div class="backup-summary-card"><div class="value">${summary.counts.sources}</div><div class="label">Texts</div></div>
+                        <div class="backup-summary-card"><div class="value">${summary.counts.highlights}</div><div class="label">Items</div></div>
+                        <div class="backup-summary-card"><div class="value">${summary.counts.readingNotes}</div><div class="label">Notes</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Restore Mode</label>
+                <div class="backup-radio-group">
+                    <label class="backup-radio-option">
+                        <input type="radio" name="restore-mode" value="replace" checked>
+                        <span class="backup-radio-copy"><strong>Replace current library</strong><span>Best for full recovery on a new browser or device. Current local data will be overwritten.</span></span>
+                    </label>
+                    <label class="backup-radio-option">
+                        <input type="radio" name="restore-mode" value="merge">
+                        <span class="backup-radio-copy"><strong>Merge missing items</strong><span>Best for combining libraries. Matching records stay in place and new ones are added.</span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" id="restore-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="restore-confirm">⬆ Restore Backup</button>
+            </div>
+        `, { size: 'modal-lg' });
+
+        document.getElementById('restore-cancel').addEventListener('click', () => this.closeModal());
+        document.getElementById('restore-confirm').addEventListener('click', async () => {
+            try {
+                const mode = document.querySelector('input[name="restore-mode"]:checked')?.value || 'replace';
+                await this.applyImportedBackup(data, mode);
+            } catch (err) {
+                this.showToast(`Restore failed: ${err.message}`, 'error');
+            }
+        });
+    }
+
+    async showEncryptedRestoreModal(data, fileName) {
+        const summary = this.backupSummary(data);
+        this.showModal(`
+            <h3>Unlock Backup</h3>
+            <div class="detail-stack">
+                <div class="backup-panel-title">Encrypted Backup</div>
+                <div class="backup-info-list">
+                    <div class="backup-info-row"><span>File</span><strong>${this.esc(fileName || 'backup.json')}</strong></div>
+                    <div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
+                    <div class="backup-info-row"><span>Texts / Items / Notes</span><strong>${summary.counts.sources} / ${summary.counts.highlights} / ${summary.counts.readingNotes}</strong></div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Passphrase</label>
+                <input type="password" id="restore-passphrase" placeholder="Enter the backup passphrase" required>
+                <div class="backup-field-hint">The backup stays local. The passphrase is used only in your browser to decrypt this file.</div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" id="restore-encrypted-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="restore-encrypted-confirm">Unlock Backup</button>
+            </div>
+        `, { size: 'modal-lg' });
+
+        document.getElementById('restore-encrypted-cancel').addEventListener('click', () => this.closeModal());
+        document.getElementById('restore-encrypted-confirm').addEventListener('click', async () => {
+            try {
+                const passphrase = document.getElementById('restore-passphrase').value;
+                if (!passphrase) {
+                    throw new Error('Enter the passphrase to continue');
+                }
+                const decrypted = await this.decryptBackupData(data, passphrase);
+                await this.showRestoreConfirmModal(decrypted, { fileName, encrypted: true });
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+    }
+
+    async showBackupCenter() {
+        await this.refreshBackupState();
+        const backup = await this.db.exportAll();
+        const summary = this.backupSummary(backup);
+        const quotaLine = this.backupState.quota
+            ? `${this.formatBytes(this.backupState.usage)} used of ${this.formatBytes(this.backupState.quota)}`
+            : 'Usage estimate unavailable';
+        const lastBackupLine = this.backupState.lastBackupAt
+            ? `${this.formatDateTime(this.backupState.lastBackupAt)} (${this.relativeTime(this.backupState.lastBackupAt)})`
+            : 'No backup saved yet';
+        const folderLine = this.backupState.folderHandle
+            ? `${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
+            : 'Not configured';
+        const thresholdDays = this.backupThresholdDays();
+
+        this.showModal(`
+            <h3>Backup & Restore</h3>
+            <div class="backup-grid">
+                <div class="detail-stack">
+                    <div class="backup-panel-title">Local Storage Health</div>
+                    <div class="backup-info-list">
+                        <div class="backup-info-row"><span>Live data location</span><strong>This browser on this device</strong></div>
+                        <div class="backup-info-row"><span>Persistent storage</span><strong>${this.backupState.persistSupported ? (this.backupState.persisted ? 'Enabled' : 'Not granted') : 'Unsupported'}</strong></div>
+                        <div class="backup-info-row"><span>Browser estimate</span><strong>${this.esc(quotaLine)}</strong></div>
+                        <div class="backup-info-row"><span>Last backup</span><strong>${this.esc(lastBackupLine)}</strong></div>
+                        <div class="backup-info-row"><span>Backup folder</span><strong>${this.esc(folderLine)}</strong></div>
+                    </div>
+                    <div class="backup-inline-actions">
+                        <button type="button" class="btn btn-secondary" id="backup-request-persist" ${this.backupState.persisted || !this.backupState.persistSupported ? 'disabled' : ''}>🛡 Request Persistent Storage</button>
+                        <button type="button" class="btn btn-secondary" id="backup-clear-folder" ${this.backupState.folderHandle ? '' : 'disabled'}>🗑 Forget Folder</button>
+                    </div>
+                    <div class="backup-field-hint">Persistent storage lowers the chance that the browser evicts IndexedDB data under storage pressure, but it is not a substitute for backups.</div>
+                </div>
+                <div class="detail-stack">
+                    <div class="backup-panel-title">Current Library Snapshot</div>
+                    <div class="backup-summary-grid">
+                        <div class="backup-summary-card"><div class="value">${summary.counts.sources}</div><div class="label">Texts</div></div>
+                        <div class="backup-summary-card"><div class="value">${summary.counts.highlights}</div><div class="label">Items</div></div>
+                        <div class="backup-summary-card"><div class="value">${summary.counts.readingNotes}</div><div class="label">Notes</div></div>
+                    </div>
+                    <div class="form-group backup-threshold-group">
+                        <label for="backup-threshold-days">Reminder threshold</label>
+                        <select id="backup-threshold-days">
+                            <option value="1" ${thresholdDays === 1 ? 'selected' : ''}>1 day</option>
+                            <option value="3" ${thresholdDays === 3 ? 'selected' : ''}>3 days</option>
+                            <option value="7" ${thresholdDays === 7 ? 'selected' : ''}>7 days</option>
+                            <option value="14" ${thresholdDays === 14 ? 'selected' : ''}>14 days</option>
+                            <option value="30" ${thresholdDays === 30 ? 'selected' : ''}>30 days</option>
+                        </select>
+                    </div>
+                    <div class="backup-field-hint">Use Replace restore for a full recovery on another browser. Use Merge only when you want to combine libraries.</div>
+                </div>
+            </div>
+            <form id="backup-export-form">
+                <div class="form-group">
+                    <label>Backup Format</label>
+                    <div class="backup-radio-group">
+                        <label class="backup-radio-option">
+                            <input type="radio" name="backup-format" value="plain" checked>
+                            <span class="backup-radio-copy"><strong>Plain JSON</strong><span>Easy to inspect and restore. Best if you already trust the storage location.</span></span>
+                        </label>
+                        <label class="backup-radio-option">
+                            <input type="radio" name="backup-format" value="encrypted">
+                            <span class="backup-radio-copy"><strong>Encrypted JSON</strong><span>Safer for cloud drives and shared machines. Requires the same passphrase to restore.</span></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="backup-passphrase-fields" class="hidden">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Passphrase</label>
+                            <input type="password" id="backup-passphrase" placeholder="Create a passphrase">
+                        </div>
+                        <div class="form-group">
+                            <label>Confirm Passphrase</label>
+                            <input type="password" id="backup-passphrase-confirm" placeholder="Repeat the passphrase">
+                        </div>
+                    </div>
+                    <div class="backup-field-hint">Keep the passphrase somewhere safe. The app cannot recover an encrypted backup without it.</div>
+                </div>
+                <div class="backup-inline-actions">
+                    <button type="submit" class="btn btn-primary">⬇ Download Backup</button>
+                    ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-save-folder">📁 Save to Folder</button>' : ''}
+                </div>
+                ${this.backupState.fsAccessSupported ? `
+                    <div class="backup-folder-box">
+                        <label class="backup-checkbox"><input type="checkbox" id="backup-auto-save" ${this.backupState.autoSaveEnabled ? 'checked' : ''}> Auto-save plain backups to the selected folder while this tab stays open</label>
+                        <div class="backup-field-hint">Recommended if you pick a synced folder such as OneDrive or Dropbox. Auto-save writes ${this.getBackupFileName({ latest: true })}.</div>
+                    </div>
+                ` : ''}
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="backup-close">Close</button>
+                </div>
+            </form>
+        `, { size: 'modal-lg' });
+
+        const updatePassphraseFields = () => {
+            const encrypted = document.querySelector('input[name="backup-format"]:checked')?.value === 'encrypted';
+            document.getElementById('backup-passphrase-fields').classList.toggle('hidden', !encrypted);
+        };
+
+        document.querySelectorAll('input[name="backup-format"]').forEach(input => {
+            input.addEventListener('change', updatePassphraseFields);
+        });
+        updatePassphraseFields();
+
+        document.getElementById('backup-close').addEventListener('click', () => this.closeModal());
+        document.getElementById('backup-request-persist')?.addEventListener('click', async () => {
+            try {
+                await this.requestPersistentStorage();
+                this.showToast('Persistent storage enabled', 'success');
+                await this.showBackupCenter();
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+        document.getElementById('backup-clear-folder')?.addEventListener('click', async () => {
+            try {
+                await this.clearBackupFolderHandle();
+                this.showToast('Saved folder was removed', 'success');
+                await this.showBackupCenter();
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+        document.getElementById('backup-threshold-days')?.addEventListener('change', async (e) => {
+            try {
+                await this.setBackupThresholdDays(e.target.value);
+                this.showToast('Backup reminder threshold updated', 'success');
+                if (this.currentView === 'dashboard') {
+                    await this.renderDashboard();
+                }
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+
+        const getBackupOptions = () => {
+            const encrypted = document.querySelector('input[name="backup-format"]:checked')?.value === 'encrypted';
+            const passphrase = document.getElementById('backup-passphrase')?.value || '';
+            const confirmPassphrase = document.getElementById('backup-passphrase-confirm')?.value || '';
+            if (encrypted) {
+                if (!passphrase) throw new Error('Enter a passphrase for the encrypted backup');
+                if (passphrase !== confirmPassphrase) throw new Error('Passphrases do not match');
+            }
+            return { encrypted, passphrase };
+        };
+
+        document.getElementById('backup-export-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                await this.exportData(getBackupOptions());
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+
+        document.getElementById('backup-save-folder')?.addEventListener('click', async () => {
+            try {
+                const options = getBackupOptions();
+                await this.writeBackupToFolder({ encrypted: options.encrypted, passphrase: options.passphrase });
+                await this.showBackupCenter();
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+
+        document.getElementById('backup-auto-save')?.addEventListener('change', async (e) => {
+            try {
+                if (e.target.checked) {
+                    const handle = await this.ensureBackupFolder();
+                    if (!handle) {
+                        e.target.checked = false;
+                        return;
+                    }
+                    this.backupState.autoSaveEnabled = true;
+                    this.persistAutoSavePreference();
+                    await this.writeBackupToFolder({ quiet: true, useLatestName: true, promptForDirectory: false });
+                    this.showToast('Session auto-backup enabled', 'success');
+                } else {
+                    this.backupState.autoSaveEnabled = false;
+                    this.persistAutoSavePreference();
+                    this.showToast('Session auto-backup disabled');
+                }
+                this.updateBackupFooter();
+                await this.showBackupCenter();
+            } catch (err) {
+                e.target.checked = false;
+                this.backupState.autoSaveEnabled = false;
+                this.persistAutoSavePreference();
+                this.showToast(err.message, 'error');
+            }
+        });
+    }
+
     async renderDashboard() {
         const stats = await this.db.getStats();
         const items = await this.db.getAllHighlights();
         const recent = [...items].sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
+        const backupReminder = BackupUtils.getBackupReminder({
+            totalSources: stats.totalSources,
+            totalHighlights: stats.totalHighlights,
+            totalReadingNotes: 0,
+            lastBackupAt: this.backupState.lastBackupAt,
+            thresholdMs: this.backupState.backupThresholdMs
+        });
+        const reminderMessage = backupReminder.kind === 'stale' && this.backupState.lastBackupAt
+            ? `${backupReminder.message} Last backup was ${this.relativeTime(this.backupState.lastBackupAt)}.`
+            : backupReminder.message;
+        const migrationMessage = this.migrationNotice
+            ? `This library was upgraded from DB v${this.migrationNotice.fromVersion} to v${this.migrationNotice.toVersion}. Backup controls and folder recovery support are now available.`
+            : '';
 
         const view = document.getElementById('view-dashboard');
         view.innerHTML = `
             <div class="view-header">
                 <h2>Dashboard</h2>
             </div>
+
+            ${this.migrationNotice ? `
+                <div class="migration-banner">
+                    <div>
+                        <div class="migration-banner-title">Backup Protection Added</div>
+                        <p>${this.esc(migrationMessage)}</p>
+                    </div>
+                    <div class="migration-banner-actions">
+                        <button class="btn btn-secondary" id="dash-migration-open">Open Backup</button>
+                        <button class="btn btn-secondary" id="dash-migration-dismiss">Dismiss</button>
+                    </div>
+                </div>
+            ` : ''}
+
+            ${backupReminder.shouldShow ? `
+                <div class="backup-reminder backup-reminder-${backupReminder.kind}">
+                    <div>
+                        <div class="backup-reminder-title">${this.esc(backupReminder.title)}</div>
+                        <p>${this.esc(reminderMessage)}</p>
+                    </div>
+                    <div class="migration-banner-actions">
+                        <button class="btn btn-primary" id="dash-backup-now">Create Backup Now</button>
+                        <button class="btn btn-secondary" id="dash-open-backup">Open Backup</button>
+                    </div>
+                </div>
+            ` : ''}
 
             <div class="stats-grid">
                 <div class="stat-card">
@@ -308,8 +1199,9 @@ class App {
 
             <div class="quick-actions">
                 <button class="btn btn-primary btn-lg" id="dash-add-item">➕ Add Item</button>
-                <button class="btn btn-secondary btn-lg" id="dash-review" ${stats.dueCount === 0 ? 'disabled' : ''}>🧠 Review ${stats.dueCount > 0 ? `(${stats.dueCount})` : ''}</button>
+                <button class="btn btn-secondary btn-lg" id="dash-review" ${stats.totalHighlights === 0 ? 'disabled' : ''}>🧠 ${stats.dueCount > 0 ? `Review (${stats.dueCount})` : 'Review Items'}</button>
                 <button class="btn btn-secondary btn-lg" id="dash-add-source">📚 Add Text</button>
+                <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
             </div>
 
             ${recent.length > 0 ? `
@@ -335,10 +1227,17 @@ class App {
         document.getElementById('dash-add-item')?.addEventListener('click', () => {
             this.showQuickAddItemModal({}, { title: 'Add New Item' });
         });
+        document.getElementById('dash-migration-open')?.addEventListener('click', () => this.showBackupCenter());
+        document.getElementById('dash-migration-dismiss')?.addEventListener('click', () => this.dismissMigrationNotice());
+        document.getElementById('dash-backup-now')?.addEventListener('click', () => this.createLatestBackupNow());
+        document.getElementById('dash-open-backup')?.addEventListener('click', () => this.showBackupCenter());
         document.getElementById('dash-add-source')?.addEventListener('click', () => this.showAddSourceModal());
-        document.getElementById('dash-review')?.addEventListener('click', () => {
-            this.navigate('review');
-            setTimeout(() => this.startReviewSession(), 100);
+        document.getElementById('dash-backup')?.addEventListener('click', () => this.showBackupCenter());
+        document.getElementById('dash-review')?.addEventListener('click', async () => {
+            await this.navigate('review');
+            if (stats.dueCount > 0) {
+                await this.startReviewSession();
+            }
         });
         view.querySelectorAll('.recent-item').forEach(item => {
             item.addEventListener('click', () => this.showHighlightDetailModal(parseInt(item.dataset.hlId, 10)));
@@ -487,6 +1386,7 @@ class App {
 
             this.closeModal();
             this.showToast('Text added to library!', 'success');
+            this.scheduleAutoBackup('source add');
             if (this.currentView === 'library') this.renderLibrary();
             if (this.currentView === 'dashboard') this.renderDashboard();
         });
@@ -530,7 +1430,7 @@ class App {
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
-                const pageText = textContent.items.map(item => item.str).join(' ');
+                const pageText = this.extractPdfPageText(textContent);
                 if (pageText.trim()) pages.push(pageText.trim());
             }
             if (pages.length === 0) throw new Error('No text content found in PDF');
@@ -541,26 +1441,7 @@ class App {
     }
 
     async openReader(sourceId) {
-        const source = await this.db.getSource(sourceId);
-        if (!source) {
-            this.showToast('Source not found', 'error');
-            return;
-        }
-
-        this.currentSource = source;
-        this.currentView = 'reader';
-
-        document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
-        document.querySelector('.nav-link[data-view="library"]')?.classList.add('active');
-        document.querySelectorAll('.view').forEach(view => {
-            view.classList.remove('active');
-            view.classList.add('hidden');
-        });
-        const view = document.getElementById('view-reader');
-        view.classList.remove('hidden');
-        view.classList.add('active');
-
-        await this.renderReader();
+        await this.navigate('reader', { sourceId });
     }
 
     async renderReader() {
@@ -627,6 +1508,7 @@ class App {
                 await this.db.deleteSource(source.id);
                 this.currentSource = null;
                 this.showToast('Source deleted', 'success');
+                this.scheduleAutoBackup('source delete');
                 this.navigate('library');
                 this.updateReviewBadge();
             }
@@ -880,6 +1762,7 @@ class App {
             this.closeModal();
             this.showToast('Item saved!', 'success');
             window.getSelection().removeAllRanges();
+            this.scheduleAutoBackup('item add');
             if (this.currentView === 'reader' && this.currentSource) await this.renderReader();
             if (this.currentView === 'vocab') await this.renderVocab();
             if (this.currentView === 'dashboard') await this.renderDashboard();
@@ -918,6 +1801,7 @@ class App {
             await this.db.deleteHighlight(hlId);
             this.closeModal();
             this.showToast('Item deleted', 'success');
+            this.scheduleAutoBackup('item delete');
             if (this.currentView === 'reader') await this.renderReader();
             if (this.currentView === 'vocab') await this.renderVocab();
             if (this.currentView === 'dashboard') await this.renderDashboard();
@@ -978,6 +1862,7 @@ class App {
             await this.db.updateHighlight(item);
             this.closeModal();
             this.showToast('Item updated!', 'success');
+            this.scheduleAutoBackup('item update');
             if (this.currentView === 'reader') await this.renderReader();
             if (this.currentView === 'vocab') await this.renderVocab();
             if (this.currentView === 'dashboard') await this.renderDashboard();
@@ -1029,6 +1914,7 @@ class App {
             await this.db.updateSource(source);
             this.closeModal();
             this.showToast('Source updated!', 'success');
+            this.scheduleAutoBackup('source update');
             this.currentSource = source;
             await this.renderReader();
         });
@@ -1088,6 +1974,7 @@ class App {
             this.closeModal();
             this.showToast('Reading note saved!', 'success');
             window.getSelection().removeAllRanges();
+            this.scheduleAutoBackup('reading note add');
             await this.renderReader();
         });
     }
@@ -1116,6 +2003,7 @@ class App {
             await this.db.deleteReadingNote(noteId);
             this.closeModal();
             this.showToast('Note deleted', 'success');
+            this.scheduleAutoBackup('reading note delete');
             await this.renderReader();
         });
     }
@@ -1267,10 +2155,14 @@ class App {
 
     async renderReviewSetup() {
         const due = await this.db.getDueHighlights();
-        const categories = this.getUniqueCategories(due);
+        const allItems = await this.db.getAllHighlights();
+        const categories = this.getUniqueCategories(allItems);
         const filteredCount = this.reviewFilterCategory
             ? due.filter(item => (item.category || 'General') === this.reviewFilterCategory).length
             : due.length;
+        const filteredSavedCount = this.reviewFilterCategory
+            ? allItems.filter(item => (item.category || 'General') === this.reviewFilterCategory).length
+            : allItems.length;
         const view = document.getElementById('view-review');
 
         view.innerHTML = `
@@ -1291,6 +2183,12 @@ class App {
                     <div style="margin-top:16px;">
                         <button class="btn btn-secondary" id="review-start-10">Quick Review (10 items)</button>
                     </div>
+                ` : filteredSavedCount > 0 ? `
+                    <p style="color:var(--text-secondary);">No items are due right now in this view. You can still study saved items manually.</p>
+                    <button class="btn btn-primary btn-lg" id="review-start-saved">Review Saved Items (${filteredSavedCount})</button>
+                    <div style="margin-top:16px;">
+                        <button class="btn btn-secondary" id="review-start-saved-10">Quick Review Saved Items (10)</button>
+                    </div>
                 ` : `
                     <p style="color:var(--success);">✨ Nothing due in this view.</p>
                     <button class="btn btn-secondary" style="margin-top:16px;" id="review-browse">Browse Items</button>
@@ -1308,11 +2206,17 @@ class App {
         document.getElementById('review-start-10')?.addEventListener('click', () => {
             this.startReviewSession(10, { category: this.reviewFilterCategory });
         });
+        document.getElementById('review-start-saved')?.addEventListener('click', () => {
+            this.startReviewSession(undefined, { category: this.reviewFilterCategory, includeAll: true });
+        });
+        document.getElementById('review-start-saved-10')?.addEventListener('click', () => {
+            this.startReviewSession(10, { category: this.reviewFilterCategory, includeAll: true });
+        });
         document.getElementById('review-browse')?.addEventListener('click', () => this.navigate('vocab'));
     }
 
     async startReviewSession(limit, options = {}) {
-        let due = await this.db.getDueHighlights();
+        let due = options.includeAll ? await this.db.getAllHighlights() : await this.db.getDueHighlights();
         if (options.category) {
             due = due.filter(item => (item.category || 'General') === options.category);
         }
@@ -1324,7 +2228,7 @@ class App {
 
         if (limit) due = due.slice(0, limit);
         if (due.length === 0) {
-            this.showToast('No items due for review', '');
+            this.showToast(options.includeAll ? 'No saved items available for review' : 'No items due for review', '');
             return;
         }
 
@@ -1479,6 +2383,7 @@ class App {
 
         session.index++;
         session.revealed = false;
+        this.scheduleAutoBackup('review progress');
         this.showReviewCard();
         this.updateReviewBadge();
     }
@@ -1511,20 +2416,16 @@ class App {
         document.getElementById('summary-dashboard').addEventListener('click', () => this.navigate('dashboard'));
     }
 
-    async exportData() {
+    async exportData(options = {}) {
         try {
-            const data = await this.db.exportAll();
-            const json = JSON.stringify(data, null, 2);
-            const blob = new Blob([json], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `langlens-backup-${new Date().toISOString().slice(0, 10)}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            this.showToast('Data exported!', 'success');
+            const backup = await this.createBackupPackage(options);
+            const fileName = this.getBackupFileName({ encrypted: !!options.encrypted });
+            this.downloadText(JSON.stringify(backup, null, backup.encrypted ? 0 : 2), fileName);
+            this.recordBackupEvent(options.encrypted ? 'download-encrypted' : 'download');
+            this.closeModal();
+            this.showToast(options.encrypted ? 'Encrypted backup downloaded!' : 'Backup downloaded!', 'success');
         } catch (e) {
-            this.showToast('Export failed: ' + e.message, 'error');
+            this.showToast('Backup failed: ' + e.message, 'error');
         }
     }
 
@@ -1532,18 +2433,16 @@ class App {
         try {
             const text = await file.text();
             const data = JSON.parse(text);
-            if (!data.sources || !data.highlights) {
-                throw new Error('Invalid format');
-            }
-            if (!confirm(`Import ${data.sources.length} sources and ${data.highlights.length} items? This will replace all existing data.`)) {
+            if (data?.encrypted) {
+                await this.showEncryptedRestoreModal(data, file.name);
                 return;
             }
-            const result = await this.db.importAll(data);
-            this.showToast(`Imported ${result.sources} sources, ${result.highlights} items!`, 'success');
-            this.navigate(this.currentView);
-            this.updateReviewBadge();
+            if (!Array.isArray(data.sources) || !Array.isArray(data.highlights)) {
+                throw new Error('Invalid backup format');
+            }
+            await this.showRestoreConfirmModal(data, { fileName: file.name, encrypted: false });
         } catch (e) {
-            this.showToast('Import failed: ' + e.message, 'error');
+            this.showToast('Restore failed: ' + e.message, 'error');
         }
     }
 }
