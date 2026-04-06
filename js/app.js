@@ -17,6 +17,7 @@ class App {
             usage: 0,
             quota: 0,
             fsAccessSupported: typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function',
+            fileSaveSupported: typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function',
             folderHandle: null,
             folderName: '',
             folderPermission: 'prompt',
@@ -1116,11 +1117,13 @@ class App {
 
     backupMethodLabel(method) {
         return {
-            download: 'downloaded',
-            'download-encrypted': 'downloaded (encrypted)',
+            download: 'downloaded by browser',
+            'download-encrypted': 'downloaded by browser (encrypted)',
             folder: 'saved to folder',
             'folder-encrypted': 'saved to folder (encrypted)',
-            'folder-auto': 'auto-saved to folder'
+            'folder-auto': 'auto-saved to folder',
+            'save-prompt': 'saved via prompt',
+            'save-prompt-encrypted': 'saved via prompt (encrypted)'
         }[method] || 'saved';
     }
 
@@ -1382,6 +1385,42 @@ class App {
         return true;
     }
 
+    async writeBackupWithSavePicker(options = {}) {
+        if (!this.backupState.fileSaveSupported) {
+            throw new Error('Save prompts are not supported in this browser');
+        }
+
+        try {
+            const backup = await this.createBackupPackage({
+                encrypted: !!options.encrypted,
+                passphrase: options.passphrase || ''
+            });
+            const fileName = this.getBackupFileName({
+                encrypted: !!options.encrypted,
+                latest: !!options.useLatestName
+            });
+            const fileHandle = await window.showSaveFilePicker({
+                suggestedName: fileName,
+                types: [{
+                    description: 'LangLens backup',
+                    accept: { 'application/json': ['.json'] }
+                }]
+            });
+            const writable = await fileHandle.createWritable();
+            await writable.write(JSON.stringify(backup, null, backup.encrypted ? 0 : 2));
+            await writable.close();
+
+            this.recordBackupEvent(options.encrypted ? 'save-prompt-encrypted' : 'save-prompt');
+            if (!options.quiet) {
+                this.showToast(`Backup saved as ${fileName}`, 'success');
+            }
+            return true;
+        } catch (err) {
+            if (err?.name === 'AbortError') return false;
+            throw err;
+        }
+    }
+
     async createLatestBackupNow() {
         await this.refreshBackupState();
 
@@ -1390,7 +1429,7 @@ class App {
             return;
         }
 
-        await this.exportData({ encrypted: false });
+        await this.exportData({ encrypted: false, useLatestName: true });
     }
 
     scheduleAutoBackup(reason = 'data change') {
@@ -1540,6 +1579,7 @@ class App {
         await this.refreshBackupState();
         const backup = await this.db.exportAll();
         const summary = this.backupSummary(backup);
+        const canPromptForBackupLocation = this.backupState.fsAccessSupported || this.backupState.fileSaveSupported;
         const quotaLine = this.backupState.quota
             ? `${this.formatBytes(this.backupState.usage)} used of ${this.formatBytes(this.backupState.quota)}`
             : 'Usage estimate unavailable';
@@ -1595,11 +1635,11 @@ class App {
                     <div class="backup-radio-group">
                         <label class="backup-radio-option">
                             <input type="radio" name="backup-format" value="plain" checked>
-                            <span class="backup-radio-copy"><strong>Plain JSON</strong><span>Easy to inspect and restore. Best if you already trust the storage location.</span></span>
+                            <span class="backup-radio-copy"><strong>Plain JSON</strong><span>Human-readable and easy to inspect. Best only if you trust the save location.</span></span>
                         </label>
                         <label class="backup-radio-option">
                             <input type="radio" name="backup-format" value="encrypted">
-                            <span class="backup-radio-copy"><strong>Encrypted JSON</strong><span>Safer for cloud drives and shared machines. Requires the same passphrase to restore.</span></span>
+                            <span class="backup-radio-copy"><strong>Encrypted JSON</strong><span>Encrypts your texts, items, and notes. The wrapper JSON still shows basic metadata like export time and counts.</span></span>
                         </label>
                     </div>
                 </div>
@@ -1617,13 +1657,14 @@ class App {
                     <div class="backup-field-hint">Keep the passphrase somewhere safe. The app cannot recover an encrypted backup without it.</div>
                 </div>
                 <div class="backup-inline-actions">
-                    <button type="submit" class="btn btn-primary">⬇ Download Backup</button>
-                    ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-save-folder">📁 Save to Folder</button>' : ''}
+                    <button type="submit" class="btn btn-primary">${canPromptForBackupLocation ? '💾 Save Backup' : '⬇ Download Backup'}</button>
+                    ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-select-folder">📁 Choose Backup Folder</button>' : ''}
                 </div>
+                <div class="backup-field-hint">${canPromptForBackupLocation ? 'Save Backup writes to the remembered backup folder or asks you to choose one before saving.' : 'This browser does not expose a save or folder picker, so backups use the normal browser download location.'}</div>
                 ${this.backupState.fsAccessSupported ? `
                     <div class="backup-folder-box">
                         <label class="backup-checkbox"><input type="checkbox" id="backup-auto-save" ${this.backupState.autoSaveEnabled ? 'checked' : ''}> Auto-save plain backups to the selected folder while this tab stays open</label>
-                        <div class="backup-field-hint">Recommended if you pick a synced folder such as OneDrive or Dropbox. Auto-save writes ${this.getBackupFileName({ latest: true })}.</div>
+                        <div class="backup-field-hint">Recommended if you pick a synced folder such as OneDrive or Dropbox. Auto-save writes ${this.getBackupFileName({ latest: true })}, and manual saves reuse the remembered folder.</div>
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -1693,10 +1734,11 @@ class App {
             }
         });
 
-        document.getElementById('backup-save-folder')?.addEventListener('click', async () => {
+        document.getElementById('backup-select-folder')?.addEventListener('click', async () => {
             try {
-                const options = getBackupOptions();
-                await this.writeBackupToFolder({ encrypted: options.encrypted, passphrase: options.passphrase });
+                const handle = await this.ensureBackupFolder();
+                if (!handle) return;
+                this.showToast(`Backup folder set to ${this.backupState.folderName || 'selected folder'}`, 'success');
                 await this.showBackupCenter();
             } catch (err) {
                 this.showToast(err.message, 'error');
@@ -3455,14 +3497,46 @@ class App {
 
     async exportData(options = {}) {
         try {
+            await this.refreshBackupState();
+
+            if (this.backupState.fsAccessSupported) {
+                const saved = await this.writeBackupToFolder({
+                    encrypted: !!options.encrypted,
+                    passphrase: options.passphrase || '',
+                    promptForDirectory: options.promptForDirectory !== false,
+                    useLatestName: !!options.useLatestName
+                });
+                if (saved) {
+                    this.closeModal();
+                }
+                return saved;
+            }
+
+            if (this.backupState.fileSaveSupported) {
+                const saved = await this.writeBackupWithSavePicker({
+                    encrypted: !!options.encrypted,
+                    passphrase: options.passphrase || '',
+                    useLatestName: !!options.useLatestName
+                });
+                if (saved) {
+                    this.closeModal();
+                }
+                return saved;
+            }
+
             const backup = await this.createBackupPackage(options);
-            const fileName = this.getBackupFileName({ encrypted: !!options.encrypted });
+            const fileName = this.getBackupFileName({
+                encrypted: !!options.encrypted,
+                latest: !!options.useLatestName
+            });
             this.downloadText(JSON.stringify(backup, null, backup.encrypted ? 0 : 2), fileName);
             this.recordBackupEvent(options.encrypted ? 'download-encrypted' : 'download');
             this.closeModal();
-            this.showToast(options.encrypted ? 'Encrypted backup downloaded!' : 'Backup downloaded!', 'success');
+            this.showToast(options.encrypted ? 'Encrypted backup downloaded to the browser location.' : 'Backup downloaded to the browser location.', 'success');
+            return true;
         } catch (e) {
             this.showToast('Backup failed: ' + e.message, 'error');
+            return false;
         }
     }
 

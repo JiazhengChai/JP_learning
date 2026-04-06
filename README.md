@@ -15,7 +15,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Review due items with a front/back flashcard workflow.
 - Export and import everything as JSON for easy backups.
 - Create encrypted backups and restore them later with a passphrase.
-- Request persistent browser storage and optionally save rolling backups to a folder.
+- Request persistent browser storage and save backups into a chosen folder, or pick one when the browser supports it.
 - Get a dashboard reminder when your local-first library has no recent backup.
 - Configure how quickly backup reminders appear and trigger a one-click backup from the dashboard.
 - Keep all data local with no backend or account required.
@@ -72,11 +72,15 @@ All app data is stored in the browser using IndexedDB. That means:
 - persistent storage can reduce eviction risk on supported browsers,
 - exporting JSON is the safest way to back up your library,
 - encrypted backups can be restored on another browser or device,
+- encrypted backup files still expose wrapper metadata like export time and item counts, but not the library contents without the passphrase,
 - folder backups are useful if you point them at a synced folder such as OneDrive.
 
 ## Backup And Restore
 
-- Use Backup to download a plain JSON snapshot or an encrypted backup file.
+- Use Backup to save a plain JSON snapshot or an encrypted backup file.
+- On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving.
+- On browsers without a save or folder picker, LangLens falls back to the browser's normal download flow.
+- Encrypted backups keep texts, study items, and notes unreadable without the passphrase, even though the JSON wrapper remains visible.
 - Use Restore to inspect a backup before applying it.
 - Replace restore is best for full recovery on a new browser.
 - Merge restore is best for combining two libraries without wiping the current one.
