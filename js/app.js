@@ -9,7 +9,7 @@ class App {
         this.currentView = 'dashboard';
         this.currentSource = null;
         this.reviewSession = null;
-        this.reviewFilterCategory = '';
+        this.reviewFilters = this.getDefaultReviewFilters();
         this.backupState = {
             storageSupported: typeof navigator !== 'undefined' && !!navigator.storage,
             persistSupported: typeof navigator !== 'undefined' && !!navigator.storage?.persist,
@@ -263,6 +263,145 @@ class App {
     getUniqueCategories(items) {
         return [...new Set(items.map(item => (item.category || 'General').trim()).filter(Boolean))]
             .sort((a, b) => a.localeCompare(b));
+    }
+
+    getDefaultReviewFilters() {
+        return {
+            categories: [],
+            sources: [],
+            masteryLevels: []
+        };
+    }
+
+    cloneReviewFilters(filters = this.reviewFilters) {
+        return {
+            categories: [...(filters?.categories || [])],
+            sources: [...(filters?.sources || [])],
+            masteryLevels: [...(filters?.masteryLevels || [])]
+        };
+    }
+
+    getReviewPrimaryCategory() {
+        return this.reviewFilters?.categories?.[0] || '';
+    }
+
+    getReviewSourceKey(item = {}) {
+        return Number.isFinite(item?.sourceId) ? String(item.sourceId) : 'manual';
+    }
+
+    getReviewSourceOptions(items, sourceMap = {}) {
+        const options = [];
+        const seen = new Set();
+
+        items.forEach(item => {
+            const value = this.getReviewSourceKey(item);
+            if (seen.has(value)) return;
+
+            seen.add(value);
+            const sourceId = Number.parseInt(value, 10);
+            options.push({
+                value,
+                label: value === 'manual'
+                    ? 'Manual Items'
+                    : (sourceMap[sourceId]?.title || `Text ${value}`)
+            });
+        });
+
+        return options.sort((left, right) => {
+            if (left.value === 'manual') return 1;
+            if (right.value === 'manual') return -1;
+            return left.label.localeCompare(right.label, undefined, { sensitivity: 'base' });
+        });
+    }
+
+    hasActiveReviewFilters(filters = this.reviewFilters) {
+        return (filters?.categories?.length || 0) > 0
+            || (filters?.sources?.length || 0) > 0
+            || (filters?.masteryLevels?.length || 0) > 0;
+    }
+
+    countReviewFilters(filters = this.reviewFilters) {
+        return (filters?.categories?.length || 0)
+            + (filters?.sources?.length || 0)
+            + (filters?.masteryLevels?.length || 0);
+    }
+
+    describeReviewFilters(filters = this.reviewFilters) {
+        const parts = [];
+
+        if ((filters?.categories?.length || 0) > 0) {
+            parts.push(`${filters.categories.length} categor${filters.categories.length === 1 ? 'y' : 'ies'}`);
+        }
+        if ((filters?.sources?.length || 0) > 0) {
+            parts.push(`${filters.sources.length} text${filters.sources.length === 1 ? '' : 's'}`);
+        }
+        if ((filters?.masteryLevels?.length || 0) > 0) {
+            parts.push(`${filters.masteryLevels.length} level${filters.masteryLevels.length === 1 ? '' : 's'}`);
+        }
+
+        return parts.length > 0
+            ? `Filtering by ${parts.join(' · ')}.`
+            : 'Combine categories, source texts, and learning level.';
+    }
+
+    itemMatchesReviewFilters(item, filters = this.reviewFilters) {
+        const category = (item.category || 'General').trim() || 'General';
+        const sourceKey = this.getReviewSourceKey(item);
+        const masteryLevel = Number.isFinite(item.masteryLevel) ? item.masteryLevel : 0;
+
+        if ((filters?.categories?.length || 0) > 0 && !filters.categories.includes(category)) {
+            return false;
+        }
+
+        if ((filters?.sources?.length || 0) > 0 && !filters.sources.includes(sourceKey)) {
+            return false;
+        }
+
+        if ((filters?.masteryLevels?.length || 0) > 0 && !filters.masteryLevels.includes(masteryLevel)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    filterReviewItems(items, filters = this.reviewFilters) {
+        return items.filter(item => this.itemMatchesReviewFilters(item, filters));
+    }
+
+    toggleReviewFilter(group, rawValue) {
+        if (!this.reviewFilters[group]) return;
+
+        const value = group === 'masteryLevels'
+            ? Number.parseInt(rawValue, 10)
+            : rawValue;
+
+        if (group === 'masteryLevels' && !Number.isFinite(value)) {
+            return;
+        }
+
+        if (this.reviewFilters[group].includes(value)) {
+            this.reviewFilters[group] = this.reviewFilters[group].filter(entry => entry !== value);
+            return;
+        }
+
+        this.reviewFilters[group] = [...this.reviewFilters[group], value];
+    }
+
+    renderReviewFilterChips(options, selectedValues, group, allLabel) {
+        const selected = new Set((selectedValues || []).map(value => String(value)));
+        const chips = [
+            `<button type="button" class="category-chip review-filter-chip review-filter-chip-all ${selected.size === 0 ? 'active' : ''}" data-review-filter-group="${group}" data-review-filter-value="__all__" aria-pressed="${selected.size === 0 ? 'true' : 'false'}">${this.esc(allLabel)}</button>`
+        ];
+
+        options.forEach(option => {
+            const value = String(option.value);
+            const isActive = selected.has(value);
+            chips.push(`
+                <button type="button" class="category-chip review-filter-chip ${isActive ? 'active' : ''}" data-review-filter-group="${group}" data-review-filter-value="${this.esc(value)}" aria-pressed="${isActive ? 'true' : 'false'}" title="${this.esc(option.label)}">${this.esc(option.label)}</button>
+            `);
+        });
+
+        return chips.join('');
     }
 
     getSourceLabel(item, sourceMap = {}) {
@@ -844,8 +983,7 @@ class App {
         return { addedCount: 0, mode: 'unsupported' };
     }
 
-    bindLibraryDropzone(view) {
-        const dropzone = view.querySelector('#library-dropzone');
+    bindSourceDropzone(dropzone) {
         if (!dropzone) return;
 
         const setDragging = (active) => {
@@ -881,6 +1019,14 @@ class App {
                 this.showToast(`Drop import failed: ${err.message}`, 'error');
             }
         });
+    }
+
+    bindLibraryDropzone(view) {
+        this.bindSourceDropzone(view.querySelector('#library-dropzone'));
+    }
+
+    bindDashboardDropzone(view) {
+        this.bindSourceDropzone(view.querySelector('#dashboard-dropzone'));
     }
 
     buildRecentActivity(sources, items, readingNotes, sourceMap = {}) {
@@ -1872,6 +2018,15 @@ class App {
                 <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
             </div>
 
+            <div class="library-dropzone dashboard-dropzone" id="dashboard-dropzone">
+                <div class="dashboard-dropzone-mark">+</div>
+                <div>
+                    <div class="dashboard-dropzone-kicker">Quick Import</div>
+                    <div class="library-dropzone-title">Drop files or text onto the dashboard</div>
+                    <p>Drag a text file, PDF, HTML file, or plain text here to add it fast. Plain text opens the editor first so you can review it before saving.</p>
+                </div>
+            </div>
+
             ${recentActivity.length > 0 ? `
                 <div class="section-title">Recent Activity</div>
                 <div class="recent-list">
@@ -1912,6 +2067,7 @@ class App {
                 await this.startReviewSession();
             }
         });
+        this.bindDashboardDropzone(view);
         view.querySelectorAll('.recent-item').forEach(item => {
             item.addEventListener('click', async () => {
                 await this.openActivity({
@@ -2568,7 +2724,7 @@ class App {
     }
 
     async showQuickAddItemModal(data = {}, opts = {}) {
-        const suggestedCat = data.category || this.reviewFilterCategory || this.suggestCategory(data.text || '');
+        const suggestedCat = data.category || this.getReviewPrimaryCategory() || this.suggestCategory(data.text || '');
         const categoryMarkup = await this.buildCategoryMarkup(suggestedCat);
         const title = opts.title || 'Add New Item';
         const sourceLabel = data.sourceId && this.currentSource ? this.currentSource.title : '';
@@ -3361,29 +3517,69 @@ class App {
     }
 
     async renderReviewSetup() {
-        const due = await this.db.getDueHighlights();
-        const allItems = await this.db.getAllHighlights();
+        const [due, allItems, sources] = await Promise.all([
+            this.db.getDueHighlights(),
+            this.db.getAllHighlights(),
+            this.db.getAllSources()
+        ]);
+        const sourceMap = {};
+        sources.forEach(source => {
+            sourceMap[source.id] = source;
+        });
         const categories = this.getUniqueCategories(allItems);
-        const filteredCount = this.reviewFilterCategory
-            ? due.filter(item => (item.category || 'General') === this.reviewFilterCategory).length
-            : due.length;
-        const filteredSavedCount = this.reviewFilterCategory
-            ? allItems.filter(item => (item.category || 'General') === this.reviewFilterCategory).length
-            : allItems.length;
+        const sourceOptions = this.getReviewSourceOptions(allItems, sourceMap);
+        const masteryOptions = Array.from({ length: 6 }, (_, level) => ({
+            value: String(level),
+            label: this.masteryName(level)
+        }));
+
+        this.reviewFilters = {
+            categories: this.reviewFilters.categories.filter(category => categories.includes(category)),
+            sources: this.reviewFilters.sources.filter(sourceId => sourceOptions.some(option => option.value === sourceId)),
+            masteryLevels: this.reviewFilters.masteryLevels.filter(level => masteryOptions.some(option => option.value === String(level)))
+        };
+
+        const filteredDue = this.filterReviewItems(due, this.reviewFilters);
+        const filteredAllItems = this.filterReviewItems(allItems, this.reviewFilters);
+        const filteredCount = filteredDue.length;
+        const filteredSavedCount = filteredAllItems.length;
+        const activeFilterCount = this.countReviewFilters(this.reviewFilters);
         const view = document.getElementById('view-review');
 
         view.innerHTML = `
             <div class="review-setup">
                 <h2>🧠 Review Mode</h2>
-                <p>Front shows only the prompt. Flip to reveal your note and details.</p>
+                <p class="review-intro">Front shows only the prompt. Flip to reveal your note and details.</p>
                 <div class="review-stat">${filteredCount}</div>
-                <p style="color:var(--text-secondary);margin-bottom:20px;">items ready to review</p>
-                <div class="review-filter-bar">
-                    <label for="review-category">Category</label>
-                    <select id="review-category">
-                        <option value="">All Categories</option>
-                        ${categories.map(category => `<option value="${this.esc(category)}" ${this.reviewFilterCategory === category ? 'selected' : ''}>${this.esc(category)}</option>`).join('')}
-                    </select>
+                <p class="review-count-note">items ready to review</p>
+                <div class="review-filter-panel">
+                    <div class="review-filter-panel-header">
+                        <div>
+                            <div class="review-filter-panel-title">Focus this session</div>
+                            <p>${this.esc(this.describeReviewFilters(this.reviewFilters))}</p>
+                        </div>
+                        ${activeFilterCount > 0 ? '<button class="btn btn-secondary btn-sm" id="review-clear-filters">Clear Filters</button>' : ''}
+                    </div>
+                    <div class="review-filter-groups">
+                        <div class="review-filter-group">
+                            <div class="review-filter-label">Categories</div>
+                            <div class="review-filter-chip-row">
+                                ${this.renderReviewFilterChips(categories.map(category => ({ value: category, label: category })), this.reviewFilters.categories, 'categories', 'All Categories')}
+                            </div>
+                        </div>
+                        <div class="review-filter-group">
+                            <div class="review-filter-label">Texts</div>
+                            <div class="review-filter-chip-row">
+                                ${this.renderReviewFilterChips(sourceOptions, this.reviewFilters.sources, 'sources', 'All Texts')}
+                            </div>
+                        </div>
+                        <div class="review-filter-group">
+                            <div class="review-filter-label">Learning Level</div>
+                            <div class="review-filter-chip-row">
+                                ${this.renderReviewFilterChips(masteryOptions, this.reviewFilters.masteryLevels, 'masteryLevels', 'All Levels')}
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 ${filteredCount > 0 ? `
                     <button class="btn btn-primary btn-lg" id="review-start-all">Start Review (${filteredCount})</button>
@@ -3391,42 +3587,56 @@ class App {
                         <button class="btn btn-secondary" id="review-start-10">Quick Review (10 items)</button>
                     </div>
                 ` : filteredSavedCount > 0 ? `
-                    <p style="color:var(--text-secondary);">No items are due right now in this view. You can still study saved items manually.</p>
+                    <p class="review-manual-message">No items are due right now in this view. You can still study saved items manually.</p>
                     <button class="btn btn-primary btn-lg" id="review-start-saved">Review Saved Items (${filteredSavedCount})</button>
                     <div style="margin-top:16px;">
                         <button class="btn btn-secondary" id="review-start-saved-10">Quick Review Saved Items (10)</button>
                     </div>
                 ` : `
-                    <p style="color:var(--success);">✨ Nothing due in this view.</p>
+                    <p class="review-empty-message">Nothing is due in this view.</p>
                     <button class="btn btn-secondary" style="margin-top:16px;" id="review-browse">Browse Items</button>
                 `}
             </div>
         `;
 
-        document.getElementById('review-category')?.addEventListener('change', (e) => {
-            this.reviewFilterCategory = e.target.value;
+        view.querySelectorAll('.review-filter-chip').forEach(button => {
+            button.addEventListener('click', () => {
+                const group = button.dataset.reviewFilterGroup;
+                const value = button.dataset.reviewFilterValue;
+                if (!group || !value) return;
+
+                if (value === '__all__') {
+                    this.reviewFilters[group] = [];
+                } else {
+                    this.toggleReviewFilter(group, value);
+                }
+
+                this.renderReviewSetup();
+            });
+        });
+        document.getElementById('review-clear-filters')?.addEventListener('click', () => {
+            this.reviewFilters = this.getDefaultReviewFilters();
             this.renderReviewSetup();
         });
         document.getElementById('review-start-all')?.addEventListener('click', () => {
-            this.startReviewSession(undefined, { category: this.reviewFilterCategory });
+            this.startReviewSession(undefined, { filters: this.cloneReviewFilters(this.reviewFilters) });
         });
         document.getElementById('review-start-10')?.addEventListener('click', () => {
-            this.startReviewSession(10, { category: this.reviewFilterCategory });
+            this.startReviewSession(10, { filters: this.cloneReviewFilters(this.reviewFilters) });
         });
         document.getElementById('review-start-saved')?.addEventListener('click', () => {
-            this.startReviewSession(undefined, { category: this.reviewFilterCategory, includeAll: true });
+            this.startReviewSession(undefined, { filters: this.cloneReviewFilters(this.reviewFilters), includeAll: true });
         });
         document.getElementById('review-start-saved-10')?.addEventListener('click', () => {
-            this.startReviewSession(10, { category: this.reviewFilterCategory, includeAll: true });
+            this.startReviewSession(10, { filters: this.cloneReviewFilters(this.reviewFilters), includeAll: true });
         });
         document.getElementById('review-browse')?.addEventListener('click', () => this.navigate('vocab'));
     }
 
     async startReviewSession(limit, options = {}) {
         let due = options.includeAll ? await this.db.getAllHighlights() : await this.db.getDueHighlights();
-        if (options.category) {
-            due = due.filter(item => (item.category || 'General') === options.category);
-        }
+        const filters = options.filters || this.getDefaultReviewFilters();
+        due = this.filterReviewItems(due, filters);
 
         for (let i = due.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -3435,7 +3645,10 @@ class App {
 
         if (limit) due = due.slice(0, limit);
         if (due.length === 0) {
-            this.showToast(options.includeAll ? 'No saved items available for review' : 'No items due for review', '');
+            const message = this.hasActiveReviewFilters(filters)
+                ? `No ${options.includeAll ? 'saved items' : 'due items'} match the current filters`
+                : (options.includeAll ? 'No saved items available for review' : 'No items due for review');
+            this.showToast(message, '');
             return;
         }
 

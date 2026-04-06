@@ -9,10 +9,11 @@ LangLens is a focused language study workspace for learning from real text. Impo
 ## Highlights
 
 - Read from a personal library of imported texts.
+- Drop files or plain text onto the dashboard or library to create texts quickly.
 - Save study items with just an input text and note.
 - Capture reading notes in context and browse them later by source or color.
 - Group items into categories and keep metadata like added time and character count.
-- Review due items with a front/back flashcard workflow.
+- Review due items with a front/back flashcard workflow and filter by multiple categories, source texts, and mastery levels.
 - Export and import everything as JSON for easy backups.
 - Create encrypted backups and restore them later with a passphrase.
 - Request persistent browser storage and save backups into a chosen folder, or pick one when the browser supports it.
@@ -22,11 +23,11 @@ LangLens is a focused language study workspace for learning from real text. Impo
 
 ## Screens
 
-- Dashboard: at-a-glance stats, recent activity, and due review count.
+- Dashboard: at-a-glance stats, recent activity, due review count, and quick drag-and-drop text import.
 - Library: organize sources and open them in the reader.
 - Items: browse saved items by category, source, mastery, and review state.
 - Notes: browse saved reading notes by source, color, and creation date.
-- Review: study prompt-only cards, flip for the note, then rate recall.
+- Review: study prompt-only cards, flip for the note, filter the queue, then rate recall.
 
 ## Tech Stack
 

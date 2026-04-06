@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LangLens icon">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="27" y1="23" x2="51" y2="47" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#fde68a"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#bg)"/>
+  <rect x="15" y="14" width="24" height="36" rx="8" fill="#ecfeff" opacity="0.94"/>
+  <rect x="19" y="21" width="13" height="3.5" rx="1.75" fill="#0f766e" opacity="0.9"/>
+  <rect x="19" y="28.5" width="10" height="3.5" rx="1.75" fill="#0f766e" opacity="0.7"/>
+  <rect x="19" y="36" width="13" height="3.5" rx="1.75" fill="#0f766e" opacity="0.9"/>
+  <circle cx="38" cy="34" r="10" fill="none" stroke="url(#lens)" stroke-width="4.5"/>
+  <path d="M44.5 40.5L51.5 47.5" fill="none" stroke="url(#lens)" stroke-linecap="round" stroke-width="4.5"/>
+  <circle cx="38" cy="34" r="3" fill="#fde68a" opacity="0.9"/>
+</svg>
