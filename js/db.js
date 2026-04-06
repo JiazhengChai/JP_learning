@@ -138,6 +138,7 @@ class Database {
     _normalizeSource(source = {}, opts = {}) {
         return {
             ...source,
+            imageUrl: String(source.imageUrl || '').trim(),
             createdAt: source.createdAt || Date.now(),
             updatedAt: opts.touch ? Date.now() : (source.updatedAt || source.createdAt || Date.now()),
             tags: Array.isArray(source.tags) ? source.tags.filter(Boolean) : []
@@ -402,6 +403,32 @@ class Database {
     async deleteSetting(key) {
         const store = this._store('settings', 'readwrite');
         return this._req(store, 'delete', key);
+    }
+
+    async clearLibraryData() {
+        await this._clearStore('sources');
+        await this._clearStore('highlights');
+        await this._clearStore('readingNotes');
+    }
+
+    async clearSourceAnnotationOffsets(sourceId) {
+        const highlights = await this.getHighlightsBySource(sourceId);
+        for (const highlight of highlights) {
+            await this.updateHighlight({
+                ...highlight,
+                startOffset: null,
+                endOffset: null
+            });
+        }
+
+        const notes = await this.getReadingNotesBySource(sourceId);
+        for (const note of notes) {
+            await this.updateReadingNote({
+                ...note,
+                startOffset: null,
+                endOffset: null
+            });
+        }
     }
 
     async getStats() {

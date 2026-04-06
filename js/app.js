@@ -393,6 +393,7 @@ class App {
         document.getElementById('btn-import').addEventListener('click', () => {
             document.getElementById('import-file').click();
         });
+        document.getElementById('btn-clear-data')?.addEventListener('click', () => this.showClearDataModal());
         document.getElementById('import-file').addEventListener('change', (e) => {
             if (e.target.files[0]) this.importData(e.target.files[0]);
             e.target.value = '';
@@ -484,6 +485,264 @@ class App {
 
     closeModal() {
         document.getElementById('modal-overlay').classList.add('hidden');
+    }
+
+    bindSourceImageFallback(scope = document) {
+        if (!scope?.querySelectorAll) return;
+
+        scope.querySelectorAll('img[data-source-image]').forEach(img => {
+            img.addEventListener('error', () => {
+                img.closest('[data-source-image-shell]')?.remove();
+            }, { once: true });
+        });
+    }
+
+    detectImportedImageUrl(rawUrl) {
+        const value = String(rawUrl || '').trim();
+        if (!value) return '';
+        if (/^(https?:)?\/\//i.test(value) || /^data:image\//i.test(value) || /^blob:/i.test(value)) {
+            return value;
+        }
+        return '';
+    }
+
+    extractSourceImageFromDocument(doc) {
+        const image = doc.querySelector('img[src]');
+        if (!image) return '';
+        return this.detectImportedImageUrl(image.getAttribute('src'));
+    }
+
+    async extractSourceDataFromFile(file) {
+        const name = file.name.toLowerCase();
+        const ext = name.substring(name.lastIndexOf('.'));
+
+        if (ext === '.txt' || ext === '.md' || ext === '.csv' || ext === '.srt' || ext === '.vtt') {
+            return {
+                content: await file.text(),
+                imageUrl: ''
+            };
+        }
+
+        if (ext === '.html' || ext === '.htm' || ext === '.xml') {
+            const raw = await file.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(raw, ext === '.xml' ? 'text/xml' : 'text/html');
+            const imageUrl = this.extractSourceImageFromDocument(doc);
+            doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+
+            return {
+                content: (doc.body || doc.documentElement).textContent.replace(/\n{3,}/g, '\n\n').trim(),
+                imageUrl
+            };
+        }
+
+        if (ext === '.json') {
+            const raw = await file.text();
+            try {
+                const data = JSON.parse(raw);
+                return {
+                    content: typeof data === 'string' ? data : JSON.stringify(data, null, 2),
+                    imageUrl: ''
+                };
+            } catch {
+                return {
+                    content: raw,
+                    imageUrl: ''
+                };
+            }
+        }
+
+        if (ext === '.pdf') {
+            if (typeof pdfjsLib === 'undefined') {
+                throw new Error('PDF.js library not loaded. Please refresh and try again.');
+            }
+
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const pages = [];
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = this.extractPdfPageText(textContent);
+                if (pageText.trim()) pages.push(pageText.trim());
+            }
+
+            if (pages.length === 0) {
+                throw new Error('No text content found in PDF');
+            }
+
+            return {
+                content: pages.join('\n\n'),
+                imageUrl: ''
+            };
+        }
+
+        throw new Error(`Unsupported file type: ${ext}`);
+    }
+
+    bindSourceFileUpload() {
+        document.getElementById('src-file-upload')?.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const status = document.getElementById('src-file-status');
+            const titleInput = document.getElementById('src-title');
+            const contentInput = document.getElementById('src-content');
+            const imageInput = document.getElementById('src-image');
+
+            status.textContent = 'Extracting text...';
+            status.style.color = 'var(--accent)';
+
+            try {
+                const sourceData = await this.extractSourceDataFromFile(file);
+                contentInput.value = sourceData.content;
+
+                if (!titleInput.value.trim()) {
+                    titleInput.value = file.name.replace(/\.[^.]+$/, '');
+                }
+
+                if (sourceData.imageUrl && imageInput && !imageInput.value.trim()) {
+                    imageInput.value = sourceData.imageUrl;
+                }
+
+                status.textContent = sourceData.imageUrl
+                    ? `✅ Extracted ${sourceData.content.length} characters from ${file.name} and found a cover image`
+                    : `✅ Extracted ${sourceData.content.length} characters from ${file.name}`;
+                status.style.color = 'var(--success)';
+            } catch (err) {
+                status.textContent = `❌ Failed: ${err.message}`;
+                status.style.color = 'var(--danger)';
+            }
+        });
+    }
+
+    async deleteSourceWithConfirm(sourceId) {
+        const source = await this.db.getSource(sourceId);
+        if (!source) return false;
+        if (!confirm(`Delete "${source.title}" and all its saved items?`)) return false;
+
+        await this.db.deleteSource(source.id);
+
+        if (this.currentSource?.id === source.id) {
+            this.currentSource = null;
+        }
+
+        this.reviewSession = null;
+        this.closeModal();
+        this.showToast('Text removed from library', 'success');
+        this.scheduleAutoBackup('source delete');
+
+        if (this.currentView === 'reader') {
+            await this.navigate('library', { replaceHistory: true, silentMissingSource: true });
+        } else if (this.currentView === 'library') {
+            await this.renderLibrary();
+        } else if (this.currentView === 'dashboard') {
+            await this.renderDashboard();
+        } else if (this.currentView === 'vocab') {
+            await this.renderVocab();
+        } else if (this.currentView === 'review') {
+            await this.renderReviewSetup();
+        }
+
+        await this.updateReviewBadge();
+        return true;
+    }
+
+    async deleteHighlightWithConfirm(hlId, opts = {}) {
+        const item = opts.item || await this.db.getHighlight(hlId);
+        if (!item) return false;
+        if (!confirm(opts.message || 'Delete this item?')) return false;
+
+        await this.db.deleteHighlight(item.id);
+
+        if (opts.closeModal) {
+            this.closeModal();
+        }
+
+        this.showToast('Item deleted', 'success');
+        this.scheduleAutoBackup('item delete');
+
+        if (this.currentView === 'reader') {
+            await this.renderReader();
+        }
+        if (this.currentView === 'vocab') {
+            await this.renderVocab();
+        }
+        if (this.currentView === 'dashboard') {
+            await this.renderDashboard();
+        }
+        if (this.currentView === 'review') {
+            this.reviewSession = null;
+            await this.renderReviewSetup();
+        }
+
+        await this.updateReviewBadge();
+        return true;
+    }
+
+    async showClearDataModal() {
+        const [stats, readingNotes] = await Promise.all([
+            this.db.getStats(),
+            this.db.getAllReadingNotes()
+        ]);
+        const noteCount = readingNotes.length;
+        const hasData = stats.totalSources > 0 || stats.totalHighlights > 0 || noteCount > 0;
+
+        this.showModal(`
+            <h3>⚠️ Clear Current Data</h3>
+            <div class="detail-stack">
+                <div>This removes all texts, saved study items, and reading notes from this browser.</div>
+                <div style="margin-top:8px;">Theme settings, backup preferences, and your restore tools stay available so you can start fresh or restore right after.</div>
+            </div>
+            <div class="backup-summary-grid">
+                <div class="backup-summary-card">
+                    <div class="value">${stats.totalSources}</div>
+                    <div class="label">Texts</div>
+                </div>
+                <div class="backup-summary-card">
+                    <div class="value">${stats.totalHighlights}</div>
+                    <div class="label">Items</div>
+                </div>
+                <div class="backup-summary-card">
+                    <div class="value">${noteCount}</div>
+                    <div class="label">Notes</div>
+                </div>
+            </div>
+            <label class="backup-checkbox ${hasData ? '' : 'is-disabled'}">
+                <input type="checkbox" id="clear-data-confirm" ${hasData ? '' : 'disabled'}>
+                <span>I understand this clears the current library on this browser and can only be undone with a backup restore.</span>
+            </label>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" id="clear-data-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" id="clear-data-apply" disabled>${hasData ? 'Clear Data' : 'Nothing to Clear'}</button>
+            </div>
+        `);
+
+        const confirmInput = document.getElementById('clear-data-confirm');
+        const applyButton = document.getElementById('clear-data-apply');
+
+        document.getElementById('clear-data-cancel')?.addEventListener('click', () => this.closeModal());
+        confirmInput?.addEventListener('change', () => {
+            applyButton.disabled = !confirmInput.checked;
+        });
+        applyButton?.addEventListener('click', async () => {
+            if (!hasData || !confirmInput?.checked) return;
+
+            clearTimeout(this._autoBackupTimer);
+            this.hideSelectionToolbar();
+            await this.db.clearLibraryData();
+
+            this.currentSource = null;
+            this.reviewSession = null;
+            this.closeModal();
+            this.showToast('Current data cleared. Restore remains available.', 'success');
+
+            const targetView = this.currentView === 'reader' ? 'library' : this.currentView;
+            await this.navigate(targetView, { replaceHistory: true, silentMissingSource: true });
+            await this.updateReviewBadge();
+        });
     }
 
     async updateReviewBadge() {
@@ -1259,6 +1518,7 @@ class App {
             <div class="view-header">
                 <h2>📚 Library</h2>
                 <div class="view-header-actions">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">${sorted.length} texts</span>
                     <button class="btn btn-primary" id="lib-add">➕ Add Text</button>
                 </div>
             </div>
@@ -1273,11 +1533,24 @@ class App {
                 <div class="cards-grid">
                     ${sorted.map(source => `
                         <div class="source-card" data-id="${source.id}">
+                            ${source.imageUrl ? `
+                                <div class="source-card-image" data-source-image-shell>
+                                    <img src="${this.esc(source.imageUrl)}" alt="${this.esc(source.title)}" data-source-image>
+                                </div>
+                            ` : ''}
                             <div class="card-header">
-                                <div class="card-title">${this.esc(source.title)}</div>
-                                <span class="type-badge ${source.sourceType}">${source.sourceType}</span>
+                                <div class="card-title-stack">
+                                    <div class="card-title">${this.esc(source.title)}</div>
+                                </div>
+                                <div class="card-header-side">
+                                    <span class="type-badge ${source.sourceType}">${source.sourceType}</span>
+                                    <div class="card-actions">
+                                        <button type="button" class="icon-action-btn" data-source-action="edit" title="Edit text">✏️</button>
+                                        <button type="button" class="icon-action-btn icon-action-danger" data-source-action="delete" title="Remove text">✕</button>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="card-preview">${this.esc(source.content.substring(0, 200))}</div>
+                            <div class="card-preview">${this.esc((source.content || '').substring(0, 200))}</div>
                             <div class="card-meta">
                                 <span>📝 ${counts[source.id] || 0} items</span>
                                 <span>${this.formatDate(source.createdAt)}</span>
@@ -1297,8 +1570,31 @@ class App {
         document.getElementById('lib-add')?.addEventListener('click', () => this.showAddSourceModal());
         document.getElementById('lib-add-empty')?.addEventListener('click', () => this.showAddSourceModal());
         view.querySelectorAll('.source-card').forEach(card => {
-            card.addEventListener('click', () => this.openReader(parseInt(card.dataset.id, 10)));
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.icon-action-btn')) return;
+                this.openReader(parseInt(card.dataset.id, 10));
+            });
         });
+        view.querySelectorAll('.icon-action-btn[data-source-action]').forEach(button => {
+            button.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const card = button.closest('.source-card');
+                const sourceId = parseInt(card.dataset.id, 10);
+                const source = sorted.find(entry => entry.id === sourceId);
+                if (!source) return;
+
+                if (button.dataset.sourceAction === 'edit') {
+                    this.showEditSourceModal({
+                        ...source,
+                        tags: [...(source.tags || [])]
+                    });
+                    return;
+                }
+
+                await this.deleteSourceWithConfirm(sourceId);
+            });
+        });
+        this.bindSourceImageFallback(view);
     }
 
     showAddSourceModal() {
@@ -1329,6 +1625,10 @@ class App {
                     <input type="text" id="src-tags" placeholder="e.g., N3, news, conversation">
                 </div>
                 <div class="form-group">
+                    <label>Cover Image URL <span class="form-hint">optional, shown in the library card when available</span></label>
+                    <input type="url" id="src-image" placeholder="https://example.com/article-cover.jpg">
+                </div>
+                <div class="form-group">
                     <label>Upload File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
                     <input type="file" id="src-file-upload" accept=".txt,.pdf,.html,.htm,.md,.csv,.xml,.json,.srt,.vtt,.epub">
                     <div id="src-file-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
@@ -1344,32 +1644,14 @@ class App {
             </form>
         `, { size: 'modal-lg' });
 
-        document.getElementById('src-file-upload').addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const status = document.getElementById('src-file-status');
-            status.textContent = 'Extracting text...';
-            status.style.color = 'var(--accent)';
-            try {
-                const text = await this.extractTextFromFile(file);
-                document.getElementById('src-content').value = text;
-                if (!document.getElementById('src-title').value.trim()) {
-                    document.getElementById('src-title').value = file.name.replace(/\.[^.]+$/, '');
-                }
-                status.textContent = `✅ Extracted ${text.length} characters from ${file.name}`;
-                status.style.color = 'var(--success)';
-            } catch (err) {
-                status.textContent = `❌ Failed: ${err.message}`;
-                status.style.color = 'var(--danger)';
-            }
-        });
+        this.bindSourceFileUpload();
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('add-source-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const title = document.getElementById('src-title').value.trim();
             const content = document.getElementById('src-content').value;
-            if (!title || !content) return;
+            if (!title || !content.trim()) return;
 
             const tags = document.getElementById('src-tags').value
                 .split(',')
@@ -1379,6 +1661,7 @@ class App {
             await this.db.addSource({
                 title,
                 content,
+                imageUrl: document.getElementById('src-image').value.trim(),
                 sourceType: document.getElementById('src-type').value,
                 language: document.getElementById('src-lang').value.trim(),
                 tags
@@ -1393,51 +1676,8 @@ class App {
     }
 
     async extractTextFromFile(file) {
-        const name = file.name.toLowerCase();
-        const ext = name.substring(name.lastIndexOf('.'));
-
-        if (ext === '.txt' || ext === '.md' || ext === '.csv' || ext === '.srt' || ext === '.vtt') {
-            return await file.text();
-        }
-
-        if (ext === '.html' || ext === '.htm' || ext === '.xml') {
-            const raw = await file.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(raw, ext === '.xml' ? 'text/xml' : 'text/html');
-            // Remove script and style elements
-            doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-            return (doc.body || doc.documentElement).textContent.replace(/\n{3,}/g, '\n\n').trim();
-        }
-
-        if (ext === '.json') {
-            const raw = await file.text();
-            try {
-                const data = JSON.parse(raw);
-                return typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-            } catch {
-                return raw;
-            }
-        }
-
-        if (ext === '.pdf') {
-            if (typeof pdfjsLib === 'undefined') {
-                throw new Error('PDF.js library not loaded. Please refresh and try again.');
-            }
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            const pages = [];
-            for (let i = 1; i <= pdf.numPages; i++) {
-                const page = await pdf.getPage(i);
-                const textContent = await page.getTextContent();
-                const pageText = this.extractPdfPageText(textContent);
-                if (pageText.trim()) pages.push(pageText.trim());
-            }
-            if (pages.length === 0) throw new Error('No text content found in PDF');
-            return pages.join('\n\n');
-        }
-
-        throw new Error(`Unsupported file type: ${ext}`);
+        const sourceData = await this.extractSourceDataFromFile(file);
+        return sourceData.content;
     }
 
     async openReader(sourceId) {
@@ -1455,6 +1695,11 @@ class App {
         view.innerHTML = `
             <button class="reader-back" id="reader-back">← Back to Library</button>
             <div class="reader-source-info">
+                ${source.imageUrl ? `
+                    <div class="reader-source-cover" data-source-image-shell>
+                        <img src="${this.esc(source.imageUrl)}" alt="${this.esc(source.title)}" data-source-image>
+                    </div>
+                ` : ''}
                 <h2>${this.esc(source.title)}</h2>
                 <div class="meta">
                     <span class="type-badge ${source.sourceType}">${source.sourceType}</span>
@@ -1504,18 +1749,11 @@ class App {
 
         document.getElementById('reader-back').addEventListener('click', () => this.navigate('library'));
         document.getElementById('reader-delete-source')?.addEventListener('click', async () => {
-            if (confirm(`Delete "${source.title}" and all its saved items?`)) {
-                await this.db.deleteSource(source.id);
-                this.currentSource = null;
-                this.showToast('Source deleted', 'success');
-                this.scheduleAutoBackup('source delete');
-                this.navigate('library');
-                this.updateReviewBadge();
-            }
+            await this.deleteSourceWithConfirm(source.id);
         });
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
 
-        view.querySelectorAll('.hl-list-item').forEach(item => {
+        view.querySelectorAll('.hl-list-item[data-hl-id]').forEach(item => {
             item.addEventListener('click', () => this.showHighlightDetailModal(parseInt(item.dataset.hlId, 10)));
         });
         view.querySelectorAll('.hl[data-hl-id]').forEach(span => {
@@ -1539,6 +1777,7 @@ class App {
         }
         this._selectionHandler = (e) => this.handleTextSelection(e);
         document.addEventListener('mouseup', this._selectionHandler);
+        this.bindSourceImageFallback(view);
         document.getElementById('main').scrollTop = 0;
     }
 
@@ -1797,15 +2036,7 @@ class App {
 
         document.getElementById('hl-close').addEventListener('click', () => this.closeModal());
         document.getElementById('hl-delete').addEventListener('click', async () => {
-            if (!confirm('Delete this item?')) return;
-            await this.db.deleteHighlight(hlId);
-            this.closeModal();
-            this.showToast('Item deleted', 'success');
-            this.scheduleAutoBackup('item delete');
-            if (this.currentView === 'reader') await this.renderReader();
-            if (this.currentView === 'vocab') await this.renderVocab();
-            if (this.currentView === 'dashboard') await this.renderDashboard();
-            this.updateReviewBadge();
+            await this.deleteHighlightWithConfirm(hlId, { item, closeModal: true });
         });
         document.getElementById('hl-edit').addEventListener('click', () => {
             this.closeModal();
@@ -1870,53 +2101,124 @@ class App {
         });
     }
 
-    showEditSourceModal(source) {
+    async showEditSourceModal(source) {
+        const latestSource = await this.db.getSource(source.id) || source;
+        const [items, readingNotes] = await Promise.all([
+            this.db.getHighlightsBySource(latestSource.id),
+            this.db.getReadingNotesBySource(latestSource.id)
+        ]);
+        const anchoredItemCount = items.filter(item => Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset)).length;
+        const anchoredNoteCount = readingNotes.filter(note => Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)).length;
+        const hasAnchoredAnnotations = anchoredItemCount > 0 || anchoredNoteCount > 0;
+
         this.showModal(`
             <h3>✏️ Edit Source</h3>
             <form id="edit-source-form">
                 <div class="form-group">
                     <label>Title</label>
-                    <input type="text" id="src-title" value="${this.esc(source.title)}" required>
+                    <input type="text" id="src-title" value="${this.esc(latestSource.title)}" required>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Source Type</label>
                         <select id="src-type">
-                            <option value="article" ${source.sourceType === 'article' ? 'selected' : ''}>📄 Article</option>
-                            <option value="audio" ${source.sourceType === 'audio' ? 'selected' : ''}>🎧 Audio</option>
-                            <option value="video" ${source.sourceType === 'video' ? 'selected' : ''}>🎬 Video</option>
-                            <option value="other" ${source.sourceType === 'other' ? 'selected' : ''}>📋 Other</option>
+                            <option value="article" ${latestSource.sourceType === 'article' ? 'selected' : ''}>📄 Article</option>
+                            <option value="audio" ${latestSource.sourceType === 'audio' ? 'selected' : ''}>🎧 Audio</option>
+                            <option value="video" ${latestSource.sourceType === 'video' ? 'selected' : ''}>🎬 Video</option>
+                            <option value="other" ${latestSource.sourceType === 'other' ? 'selected' : ''}>📋 Other</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Language</label>
-                        <input type="text" id="src-lang" value="${this.esc(source.language || '')}">
+                        <input type="text" id="src-lang" value="${this.esc(latestSource.language || '')}">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>Tags</label>
-                    <input type="text" id="src-tags" value="${this.esc((source.tags || []).join(', '))}">
+                    <input type="text" id="src-tags" value="${this.esc((latestSource.tags || []).join(', '))}">
                 </div>
+                <div class="form-group">
+                    <label>Cover Image URL <span class="form-hint">optional, shown in the library card when available</span></label>
+                    <input type="url" id="src-image" value="${this.esc(latestSource.imageUrl || '')}" placeholder="https://example.com/article-cover.jpg">
+                </div>
+                <div class="form-group">
+                    <label>Replace From File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
+                    <input type="file" id="src-file-upload" accept=".txt,.pdf,.html,.htm,.md,.csv,.xml,.json,.srt,.vtt,.epub">
+                    <div id="src-file-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
+                </div>
+                <div class="form-group">
+                    <label>Content</label>
+                    <textarea id="src-content" rows="12" required>${this.esc(latestSource.content || '')}</textarea>
+                </div>
+                ${hasAnchoredAnnotations ? `
+                    <div class="warning-note">
+                        Editing the article body will clear ${anchoredItemCount} inline item position${anchoredItemCount === 1 ? '' : 's'} and ${anchoredNoteCount} note position${anchoredNoteCount === 1 ? '' : 's'} so saved annotations do not drift to the wrong text.
+                    </div>
+                ` : ''}
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="src-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary">💾 Update</button>
                 </div>
             </form>
-        `);
+        `, { size: 'modal-lg' });
+
+        this.bindSourceFileUpload();
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('edit-source-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            source.title = document.getElementById('src-title').value.trim();
-            source.sourceType = document.getElementById('src-type').value;
-            source.language = document.getElementById('src-lang').value.trim();
-            source.tags = document.getElementById('src-tags').value.split(',').map(tag => tag.trim()).filter(Boolean);
-            await this.db.updateSource(source);
+            const nextTitle = document.getElementById('src-title').value.trim();
+            const nextContent = document.getElementById('src-content').value;
+            if (!nextTitle || !nextContent.trim()) return;
+
+            const contentChanged = nextContent !== (latestSource.content || '');
+            if (contentChanged && hasAnchoredAnnotations) {
+                const itemLabel = `${anchoredItemCount} saved item${anchoredItemCount === 1 ? '' : 's'}`;
+                const noteLabel = `${anchoredNoteCount} reading note${anchoredNoteCount === 1 ? '' : 's'}`;
+                const confirmed = confirm(`Update "${latestSource.title}"? ${itemLabel} and ${noteLabel} will stay in the library, but their inline positions will be cleared so they do not point to the wrong text.`);
+                if (!confirmed) return;
+            }
+
+            const updatedSource = {
+                ...latestSource,
+                title: nextTitle,
+                sourceType: document.getElementById('src-type').value,
+                language: document.getElementById('src-lang').value.trim(),
+                imageUrl: document.getElementById('src-image').value.trim(),
+                content: nextContent,
+                tags: document.getElementById('src-tags').value.split(',').map(tag => tag.trim()).filter(Boolean)
+            };
+
+            await this.db.updateSource(updatedSource);
+            if (contentChanged && hasAnchoredAnnotations) {
+                await this.db.clearSourceAnnotationOffsets(updatedSource.id);
+            }
+
             this.closeModal();
-            this.showToast('Source updated!', 'success');
-            this.scheduleAutoBackup('source update');
-            this.currentSource = source;
-            await this.renderReader();
+            this.showToast(
+                contentChanged && hasAnchoredAnnotations
+                    ? 'Text updated. Inline annotations were detached to avoid drift.'
+                    : 'Source updated!',
+                'success'
+            );
+            this.scheduleAutoBackup(contentChanged ? 'source content update' : 'source update');
+
+            if (this.currentSource?.id === updatedSource.id) {
+                this.currentSource = updatedSource;
+            }
+
+            if (this.currentView === 'reader' && this.currentSource?.id === updatedSource.id) {
+                await this.renderReader();
+            }
+            if (this.currentView === 'library') {
+                await this.renderLibrary();
+            }
+            if (this.currentView === 'dashboard') {
+                await this.renderDashboard();
+            }
+            if (this.currentView === 'vocab') {
+                await this.renderVocab();
+            }
         });
     }
 
@@ -2117,6 +2419,7 @@ class App {
                         <th>Chars</th>
                         <th>Mastery</th>
                         <th>Added</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2139,6 +2442,12 @@ class App {
                                     </div>
                                 </td>
                                 <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(item.createdAt)}</td>
+                                <td class="actions-cell">
+                                    <div class="table-actions">
+                                        <button type="button" class="icon-action-btn" data-item-action="edit" data-hl-id="${item.id}" title="Edit item">✏️</button>
+                                        <button type="button" class="icon-action-btn icon-action-danger" data-item-action="delete" data-hl-id="${item.id}" title="Delete item">✕</button>
+                                    </div>
+                                </td>
                             </tr>
                         `;
                     }).join('')}
@@ -2149,7 +2458,26 @@ class App {
 
     bindVocabTableEvents() {
         document.querySelectorAll('.vocab-row').forEach(row => {
-            row.addEventListener('click', () => this.showHighlightDetailModal(parseInt(row.dataset.hlId, 10)));
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.icon-action-btn')) return;
+                this.showHighlightDetailModal(parseInt(row.dataset.hlId, 10));
+            });
+        });
+
+        document.querySelectorAll('.icon-action-btn[data-item-action]').forEach(button => {
+            button.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const hlId = parseInt(button.dataset.hlId, 10);
+                if (button.dataset.itemAction === 'edit') {
+                    const item = await this.db.getHighlight(hlId);
+                    if (item) {
+                        this.showEditHighlightModal(item);
+                    }
+                    return;
+                }
+
+                await this.deleteHighlightWithConfirm(hlId);
+            });
         });
     }
 

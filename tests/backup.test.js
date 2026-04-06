@@ -174,3 +174,94 @@ test('upgrading a legacy v3 database creates a migration notice setting', async 
 
     db.db.close();
 });
+
+test('clearLibraryData removes sources, highlights, and reading notes but keeps settings', async () => {
+    const db = await freshDatabase();
+    const sourceId = await db.addSource({
+        title: 'Article with image',
+        content: 'Example content',
+        imageUrl: 'https://example.com/cover.jpg',
+        sourceType: 'article',
+        language: 'Japanese'
+    });
+
+    await db.addHighlight({
+        sourceId,
+        text: '気になる',
+        note: 'to catch one\'s attention',
+        category: 'vocab'
+    });
+    await db.addReadingNote({
+        sourceId,
+        text: '気になる',
+        note: 'Important nuance'
+    });
+    await db.setSetting('backup-reminder-days', 21);
+
+    await db.clearLibraryData();
+
+    assert.equal((await db.getAllSources()).length, 0);
+    assert.equal((await db.getAllHighlights()).length, 0);
+    assert.equal((await db.getAllReadingNotes()).length, 0);
+    assert.equal(await db.getSetting('backup-reminder-days'), 21);
+
+    db.db.close();
+});
+
+test('source imageUrl is normalized and included in exports', async () => {
+    const db = await freshDatabase();
+    await db.addSource({
+        title: 'NHK article',
+        content: 'Body text',
+        imageUrl: '  https://example.com/article.jpg  ',
+        sourceType: 'article',
+        language: 'Japanese'
+    });
+
+    const [source] = await db.getAllSources();
+    const exported = await db.exportAll();
+
+    assert.equal(source.imageUrl, 'https://example.com/article.jpg');
+    assert.equal(exported.sources[0].imageUrl, 'https://example.com/article.jpg');
+
+    db.db.close();
+});
+
+test('clearSourceAnnotationOffsets keeps linked records but removes inline positions', async () => {
+    const db = await freshDatabase();
+    const sourceId = await db.addSource({
+        title: 'Editable article',
+        content: 'Original body text',
+        sourceType: 'article',
+        language: 'Japanese'
+    });
+    const highlightId = await db.addHighlight({
+        sourceId,
+        text: 'Original',
+        note: 'saved item',
+        startOffset: 0,
+        endOffset: 8
+    });
+    const noteId = await db.addReadingNote({
+        sourceId,
+        text: 'body',
+        note: 'reading note',
+        startOffset: 9,
+        endOffset: 13
+    });
+
+    await db.clearSourceAnnotationOffsets(sourceId);
+
+    const highlight = await db.getHighlight(highlightId);
+    const notes = await db.getReadingNotesBySource(sourceId);
+    const note = notes.find(entry => entry.id === noteId);
+
+    assert.equal(highlight.sourceId, sourceId);
+    assert.equal(highlight.startOffset, null);
+    assert.equal(highlight.endOffset, null);
+    assert.equal(note.sourceId, sourceId);
+    assert.equal(note.startOffset, null);
+    assert.equal(note.endOffset, null);
+
+    db.db.close();
+});
