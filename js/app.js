@@ -2057,7 +2057,11 @@ class App {
         });
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
         view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.hl[data-hl-id], .hl-reading-note[data-note-id]')) return;
+            const targetElement = e.target instanceof Element ? e.target : e.target?.parentElement;
+            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id]')) return;
+
+            this.hideSelectionToolbar();
+            window.getSelection()?.removeAllRanges();
             this.showEditSourceModal({
                 ...source,
                 tags: [...(source.tags || [])]
