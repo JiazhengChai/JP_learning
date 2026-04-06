@@ -564,6 +564,22 @@ nav { flex: 1; padding: 12px 0; }
     background: rgba(88,166,255,0.12);
     color: var(--accent);
 }
+.note-color-tag.note-color-yellow {
+    background: rgba(210, 153, 34, 0.14);
+    color: var(--warning);
+}
+.note-color-tag.note-color-blue {
+    background: rgba(88, 166, 255, 0.14);
+    color: var(--accent);
+}
+.note-color-tag.note-color-green {
+    background: rgba(63, 185, 80, 0.14);
+    color: var(--success);
+}
+.note-color-tag.note-color-red {
+    background: rgba(248, 81, 73, 0.14);
+    color: var(--danger);
+}
 .type-badge {
     display: inline-flex;
     padding: 3px 10px;

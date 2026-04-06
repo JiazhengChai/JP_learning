@@ -270,6 +270,45 @@ class App {
         return source ? source.title : 'Source';
     }
 
+    getReadingNoteColors() {
+        return [
+            { value: 'yellow', label: 'Yellow', tone: 'warning', icon: '🟡' },
+            { value: 'blue', label: 'Blue', tone: 'accent', icon: '🔵' },
+            { value: 'green', label: 'Green', tone: 'success', icon: '🟢' },
+            { value: 'red', label: 'Red', tone: 'danger', icon: '🔴' }
+        ];
+    }
+
+    getReadingNoteColorMeta(color = 'yellow') {
+        return this.getReadingNoteColors().find(entry => entry.value === color) || this.getReadingNoteColors()[0];
+    }
+
+    renderReadingNoteColorChips(selectedColor = 'yellow') {
+        return this.getReadingNoteColors().map(({ value, label, tone, icon }) => `
+            <button type="button" class="category-chip ${value === selectedColor ? 'active' : ''}" data-color="${value}" style="border-color:var(--${tone});color:var(--${tone});">${icon} ${label}</button>
+        `).join('');
+    }
+
+    bindReadingNoteColorChips(formSelector) {
+        const chips = [...document.querySelectorAll(`${formSelector} .category-chip[data-color]`)];
+        chips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                chips.forEach(node => node.classList.remove('active'));
+                chip.classList.add('active');
+            });
+        });
+    }
+
+    async getReadingNote(noteId, sourceId = null) {
+        if (!Number.isFinite(noteId)) return null;
+
+        const notes = Number.isFinite(sourceId)
+            ? await this.db.getReadingNotesBySource(sourceId)
+            : await this.db.getAllReadingNotes();
+
+        return notes.find(note => note.id === noteId) || null;
+    }
+
     getRouteState(viewName = this.currentView, options = {}) {
         const state = { view: viewName || 'dashboard' };
         const sourceId = Number.parseInt(options.sourceId ?? this.currentSource?.id, 10);
@@ -301,7 +340,7 @@ class App {
             return { view: 'library' };
         }
 
-        if (['dashboard', 'library', 'vocab', 'review'].includes(view)) {
+        if (['dashboard', 'library', 'vocab', 'notes', 'review'].includes(view)) {
             return { view };
         }
 
@@ -409,7 +448,7 @@ class App {
     }
 
     async navigate(viewName, options = {}) {
-        const allowedViews = new Set(['dashboard', 'library', 'reader', 'vocab', 'review']);
+        const allowedViews = new Set(['dashboard', 'library', 'reader', 'vocab', 'notes', 'review']);
         const targetView = allowedViews.has(viewName) ? viewName : 'dashboard';
         let routeState = this.getRouteState(targetView, options);
 
@@ -469,6 +508,7 @@ class App {
             if (targetView === 'library') await this.renderLibrary();
             if (targetView === 'reader') await this.renderReader();
             if (targetView === 'vocab') await this.renderVocab();
+            if (targetView === 'notes') await this.renderNotes();
             if (targetView === 'review') await this.renderReviewSetup();
         } catch (err) {
             console.error(`Failed to render ${targetView}:`, err);
@@ -910,7 +950,7 @@ class App {
     async deleteSourceWithConfirm(sourceId) {
         const source = await this.db.getSource(sourceId);
         if (!source) return false;
-        if (!confirm(`Delete "${source.title}" and all its saved items?`)) return false;
+        if (!confirm(`Delete "${source.title}" and all its saved items and notes?`)) return false;
 
         await this.db.deleteSource(source.id);
 
@@ -931,6 +971,8 @@ class App {
             await this.renderDashboard();
         } else if (this.currentView === 'vocab') {
             await this.renderVocab();
+        } else if (this.currentView === 'notes') {
+            await this.renderNotes();
         } else if (this.currentView === 'review') {
             await this.renderReviewSetup();
         }
@@ -968,6 +1010,33 @@ class App {
         }
 
         await this.updateReviewBadge();
+        return true;
+    }
+
+    async deleteReadingNoteWithConfirm(noteId, opts = {}) {
+        const note = opts.note || await this.getReadingNote(noteId, opts.sourceId);
+        if (!note) return false;
+        if (!confirm(opts.message || 'Delete this reading note?')) return false;
+
+        await this.db.deleteReadingNote(note.id);
+
+        if (opts.closeModal) {
+            this.closeModal();
+        }
+
+        this.showToast('Note deleted', 'success');
+        this.scheduleAutoBackup('reading note delete');
+
+        if (this.currentView === 'reader') {
+            await this.renderReader();
+        }
+        if (this.currentView === 'notes') {
+            await this.renderNotes();
+        }
+        if (this.currentView === 'dashboard') {
+            await this.renderDashboard();
+        }
+
         return true;
     }
 
@@ -2661,10 +2730,7 @@ class App {
                 <div class="form-group">
                     <label>Color</label>
                     <div class="category-chip-row">
-                        <button type="button" class="category-chip active" data-color="yellow" style="border-color:#d29922;color:#d29922;">🟡 Yellow</button>
-                        <button type="button" class="category-chip" data-color="blue" style="border-color:#58a6ff;color:#58a6ff;">🔵 Blue</button>
-                        <button type="button" class="category-chip" data-color="green" style="border-color:#3fb950;color:#3fb950;">🟢 Green</button>
-                        <button type="button" class="category-chip" data-color="red" style="border-color:#f85149;color:#f85149;">🔴 Red</button>
+                        ${this.renderReadingNoteColorChips(data.color || 'yellow')}
                     </div>
                 </div>
                 <div class="form-actions">
@@ -2674,13 +2740,7 @@ class App {
             </form>
         `);
 
-        const colorChips = [...document.querySelectorAll('#reading-note-form .category-chip')];
-        colorChips.forEach(chip => {
-            chip.addEventListener('click', () => {
-                colorChips.forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-            });
-        });
+        this.bindReadingNoteColorChips('#reading-note-form');
 
         this.bindEnterToSubmit(document.getElementById('reading-note-form'));
         document.getElementById('rn-cancel').addEventListener('click', () => this.closeModal());
@@ -2709,27 +2769,27 @@ class App {
     }
 
     async showReadingNoteDetail(noteId, sourceId = this.currentSource?.id) {
-        if (!Number.isFinite(sourceId)) return;
-        const [source, notes] = await Promise.all([
-            this.db.getSource(sourceId),
-            this.db.getReadingNotesBySource(sourceId)
-        ]);
-        const note = notes.find(n => n.id === noteId);
+        const note = await this.getReadingNote(noteId, sourceId);
         if (!note) return;
+        const resolvedSourceId = Number.isFinite(note.sourceId) ? note.sourceId : sourceId;
+        const source = Number.isFinite(resolvedSourceId) ? await this.db.getSource(resolvedSourceId) : null;
+        const colorMeta = this.getReadingNoteColorMeta(note.color);
         const canJumpToSource = !!source;
-        const canJumpToNote = Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+        const canJumpToNote = !!source && Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
 
         this.showModal(`
             <h3>📌 Reading Note</h3>
             <div class="selected-text-preview">${this.esc(note.text)}</div>
             <div class="detail-stack">
                 <div>${this.esc(note.note)}</div>
+                <div><strong>Color:</strong> <span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></div>
                 ${source ? `<div><strong>Source:</strong> ${this.esc(source.title)}</div>` : ''}
                 <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${this.formatDateTime(note.createdAt)}</div>
             </div>
             <div class="form-actions">
                 ${canJumpToSource ? '<button class="btn btn-secondary" id="rn-open-source">Open in Reader</button>' : ''}
                 <button class="btn btn-danger btn-sm" id="rn-delete">🗑️ Delete</button>
+                <button class="btn btn-secondary" id="rn-edit">✏️ Edit</button>
                 <button class="btn btn-primary" id="rn-close">Close</button>
             </div>
         `);
@@ -2739,13 +2799,71 @@ class App {
             this.closeModal();
             await this.openReader(source.id, canJumpToNote ? { noteId: note.id } : null);
         });
-        document.getElementById('rn-delete').addEventListener('click', async () => {
-            if (!confirm('Delete this reading note?')) return;
-            await this.db.deleteReadingNote(noteId);
+        document.getElementById('rn-edit')?.addEventListener('click', async () => {
             this.closeModal();
-            this.showToast('Note deleted', 'success');
-            this.scheduleAutoBackup('reading note delete');
-            await this.renderReader();
+            await this.showEditReadingNoteModal(note, source);
+        });
+        document.getElementById('rn-delete').addEventListener('click', async () => {
+            await this.deleteReadingNoteWithConfirm(note.id, { note, closeModal: true });
+        });
+    }
+
+    async showEditReadingNoteModal(note, source = null) {
+        const linkedSource = source || (Number.isFinite(note.sourceId) ? await this.db.getSource(note.sourceId) : null);
+
+        this.showModal(`
+            <h3>✏️ Edit Reading Note</h3>
+            <div class="selected-text-preview">${this.esc(note.text)}</div>
+            <form id="edit-reading-note-form">
+                <div class="form-group">
+                    <label>Your Note</label>
+                    <textarea id="edit-rn-content" rows="4" placeholder="Write your thought, question, or observation..." required>${this.esc(note.note || '')}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Color</label>
+                    <div class="category-chip-row">
+                        ${this.renderReadingNoteColorChips(note.color || 'yellow')}
+                    </div>
+                </div>
+                ${linkedSource ? `
+                    <div class="item-meta-panel">
+                        <div><strong>Source:</strong> ${this.esc(linkedSource.title)}</div>
+                    </div>
+                ` : ''}
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="edit-rn-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">💾 Update</button>
+                </div>
+            </form>
+        `);
+
+        this.bindReadingNoteColorChips('#edit-reading-note-form');
+        this.bindEnterToSubmit(document.getElementById('edit-reading-note-form'));
+        document.getElementById('edit-rn-cancel').addEventListener('click', () => this.closeModal());
+        document.getElementById('edit-reading-note-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const content = document.getElementById('edit-rn-content').value.trim();
+            if (!content) return;
+
+            await this.db.updateReadingNote({
+                ...note,
+                note: content,
+                color: document.querySelector('#edit-reading-note-form .category-chip.active')?.dataset.color || note.color || 'yellow'
+            });
+
+            this.closeModal();
+            this.showToast('Note updated!', 'success');
+            this.scheduleAutoBackup('reading note update');
+
+            if (this.currentView === 'reader') {
+                await this.renderReader();
+            }
+            if (this.currentView === 'notes') {
+                await this.renderNotes();
+            }
+            if (this.currentView === 'dashboard') {
+                await this.renderDashboard();
+            }
         });
     }
 
@@ -2842,6 +2960,81 @@ class App {
         this.bindVocabTableEvents();
     }
 
+    async renderNotes() {
+        const notes = await this.db.getAllReadingNotes();
+        const sources = await this.db.getAllSources();
+        const sourceMap = {};
+        for (const source of sources) sourceMap[source.id] = source;
+        const view = document.getElementById('view-notes');
+
+        view.innerHTML = `
+            <div class="view-header">
+                <h2>📌 Reading Notes</h2>
+                <div class="view-header-actions">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">${notes.length} notes</span>
+                    <button class="btn btn-secondary" id="notes-open-library">📚 Open Library</button>
+                </div>
+            </div>
+
+            <div class="vocab-filters">
+                <input type="text" id="notes-search" placeholder="🔍 Search selection, note, source...">
+                <select id="notes-filter-color">
+                    <option value="">All Colors</option>
+                    ${this.getReadingNoteColors().map(color => `<option value="${color.value}">${this.esc(color.label)}</option>`).join('')}
+                </select>
+                <select id="notes-filter-source">
+                    <option value="">All Sources</option>
+                    <option value="manual">Manual / Unlinked</option>
+                    ${sources.map(source => `<option value="${source.id}">${this.esc(source.title)}</option>`).join('')}
+                </select>
+                <select id="notes-sort">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="alpha">Selected Text A → Z</option>
+                    <option value="source">Source A → Z</option>
+                </select>
+            </div>
+
+            <div id="notes-table-container">${this.renderNotesTable(notes, sourceMap)}</div>
+        `;
+
+        const applyFilters = () => {
+            const search = document.getElementById('notes-search').value.toLowerCase();
+            const color = document.getElementById('notes-filter-color').value;
+            const sourceId = document.getElementById('notes-filter-source').value;
+            const sort = document.getElementById('notes-sort').value;
+
+            let filtered = [...notes];
+            if (search) {
+                filtered = filtered.filter(note =>
+                    note.text.toLowerCase().includes(search)
+                    || (note.note || '').toLowerCase().includes(search)
+                    || this.getSourceLabel(note, sourceMap).toLowerCase().includes(search)
+                );
+            }
+            if (color) filtered = filtered.filter(note => (note.color || 'yellow') === color);
+            if (sourceId === 'manual') filtered = filtered.filter(note => !note.sourceId);
+            if (sourceId && sourceId !== 'manual') filtered = filtered.filter(note => note.sourceId === parseInt(sourceId, 10));
+
+            if (sort === 'newest') filtered.sort((a, b) => b.createdAt - a.createdAt);
+            if (sort === 'oldest') filtered.sort((a, b) => a.createdAt - b.createdAt);
+            if (sort === 'alpha') filtered.sort((a, b) => a.text.localeCompare(b.text));
+            if (sort === 'source') filtered.sort((a, b) => this.getSourceLabel(a, sourceMap).localeCompare(this.getSourceLabel(b, sourceMap)));
+
+            document.getElementById('notes-table-container').innerHTML = this.renderNotesTable(filtered, sourceMap);
+            this.bindNotesTableEvents();
+        };
+
+        ['notes-search', 'notes-filter-color', 'notes-filter-source', 'notes-sort'].forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener(id === 'notes-search' ? 'input' : 'change', applyFilters);
+        });
+
+        document.getElementById('notes-open-library')?.addEventListener('click', () => this.navigate('library'));
+
+        this.bindNotesTableEvents();
+    }
+
     renderVocabTable(items, sourceMap) {
         if (items.length === 0) {
             return '<div class="empty-state"><div class="empty-icon">🔤</div><p>No study items match your filters.</p></div>';
@@ -2895,6 +3088,52 @@ class App {
         `;
     }
 
+    renderNotesTable(notes, sourceMap) {
+        if (notes.length === 0) {
+            return '<div class="empty-state"><div class="empty-icon">📌</div><p>No reading notes match your filters.</p></div>';
+        }
+
+        return `
+            <table class="vocab-table">
+                <thead>
+                    <tr>
+                        <th>Selected Text</th>
+                        <th>Note</th>
+                        <th>Color</th>
+                        <th>Source</th>
+                        <th>Added</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${notes.map(note => {
+                        const colorMeta = this.getReadingNoteColorMeta(note.color);
+                        const sourceId = Number.isFinite(note.sourceId) ? note.sourceId : '';
+                        return `
+                            <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
+                                <td>
+                                    <div class="vocab-text" style="color:var(--${colorMeta.tone});">${this.esc(note.text)}</div>
+                                </td>
+                                <td>
+                                    <div>${this.esc(note.note || '—')}</div>
+                                </td>
+                                <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
+                                <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
+                                <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(note.createdAt)}</td>
+                                <td class="actions-cell">
+                                    <div class="table-actions">
+                                        <button type="button" class="icon-action-btn" data-note-action="edit" data-note-id="${note.id}" data-source-id="${sourceId}" title="Edit note">✏️</button>
+                                        <button type="button" class="icon-action-btn icon-action-danger" data-note-action="delete" data-note-id="${note.id}" data-source-id="${sourceId}" title="Delete note">✕</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+
     bindVocabTableEvents() {
         document.querySelectorAll('.vocab-row').forEach(row => {
             row.addEventListener('click', (e) => {
@@ -2916,6 +3155,37 @@ class App {
                 }
 
                 await this.deleteHighlightWithConfirm(hlId);
+            });
+        });
+    }
+
+    bindNotesTableEvents() {
+        document.querySelectorAll('.notes-row').forEach(row => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.icon-action-btn')) return;
+                const noteId = parseInt(row.dataset.noteId, 10);
+                const sourceId = parseInt(row.dataset.sourceId, 10);
+                this.showReadingNoteDetail(noteId, Number.isFinite(sourceId) ? sourceId : null);
+            });
+        });
+
+        document.querySelectorAll('.icon-action-btn[data-note-action]').forEach(button => {
+            button.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const noteId = parseInt(button.dataset.noteId, 10);
+                const sourceId = parseInt(button.dataset.sourceId, 10);
+                const note = await this.getReadingNote(noteId, Number.isFinite(sourceId) ? sourceId : null);
+                if (!note) return;
+
+                if (button.dataset.noteAction === 'edit') {
+                    await this.showEditReadingNoteModal(note);
+                    return;
+                }
+
+                await this.deleteReadingNoteWithConfirm(noteId, {
+                    note,
+                    sourceId: Number.isFinite(sourceId) ? sourceId : null
+                });
             });
         });
     }
