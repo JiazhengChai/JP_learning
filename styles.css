@@ -439,6 +439,29 @@ nav { flex: 1; padding: 12px 0; }
 }
 
 /* === Cards Grid (Library) === */
+.library-dropzone {
+    margin-bottom: 20px;
+    padding: 18px 20px;
+    border: 1px dashed rgba(88, 166, 255, 0.35);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, rgba(88, 166, 255, 0.08), rgba(88, 166, 255, 0.03));
+    transition: all 0.15s;
+}
+.library-dropzone.is-dragover {
+    border-color: var(--accent);
+    background: linear-gradient(135deg, rgba(88, 166, 255, 0.16), rgba(88, 166, 255, 0.08));
+}
+.library-dropzone-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.library-dropzone p {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
 .cards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -811,6 +834,22 @@ nav { flex: 1; padding: 12px 0; }
     color: var(--text-secondary);
     font-size: 0.8rem;
     line-height: 1.5;
+}
+.source-modal-image-preview {
+    width: 100%;
+    max-width: 280px;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    margin-top: 10px;
+}
+.source-modal-image-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 .form-row {
     display: flex;
@@ -1340,10 +1379,32 @@ nav { flex: 1; padding: 12px 0; }
     transition: all 0.15s;
 }
 .recent-item:hover { background: var(--bg-card-hover); }
+.recent-item-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.recent-item .ri-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+.recent-item .ri-topline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
 .recent-item .ri-text {
     font-family: var(--font-jp);
     font-weight: 500;
     flex: 1;
+}
+.recent-item .ri-subtext {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
 }
 .recent-item .ri-meta {
     font-size: 0.75rem;
@@ -1412,6 +1473,10 @@ nav { flex: 1; padding: 12px 0; }
     .recent-item {
         flex-wrap: wrap;
         align-items: flex-start;
+    }
+    .recent-item .ri-meta {
+        width: 100%;
+        margin-left: 32px;
     }
     .backup-summary-grid {
         grid-template-columns: 1fr;

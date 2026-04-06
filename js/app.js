@@ -29,6 +29,7 @@ class App {
         this._selectionHandler = null;
         this._toastTimer = null;
         this._autoBackupTimer = null;
+        this._libraryCardClickTimer = null;
         this.migrationNotice = null;
     }
 
@@ -497,6 +498,74 @@ class App {
         });
     }
 
+    isImageFile(file) {
+        if (!file) return false;
+        if (String(file.type || '').startsWith('image/')) return true;
+        return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name || '');
+    }
+
+    readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('Unable to read image file'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    updateSourceImagePreview(imageUrl) {
+        const preview = document.getElementById('src-image-preview');
+        if (!preview) return;
+
+        const normalized = String(imageUrl || '').trim();
+        if (!normalized) {
+            preview.innerHTML = '';
+            preview.classList.add('hidden');
+            return;
+        }
+
+        preview.innerHTML = `
+            <div class="source-modal-image-preview" data-source-image-shell>
+                <img src="${this.esc(normalized)}" alt="Article image preview" data-source-image>
+            </div>
+        `;
+        preview.classList.remove('hidden');
+        this.bindSourceImageFallback(preview);
+    }
+
+    bindSourceImageControls() {
+        const imageInput = document.getElementById('src-image');
+        const imageUpload = document.getElementById('src-image-upload');
+
+        imageInput?.addEventListener('input', () => {
+            this.updateSourceImagePreview(imageInput.value);
+        });
+
+        imageUpload?.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (!this.isImageFile(file)) {
+                this.showToast('Choose an image file for the article image.', 'error');
+                e.target.value = '';
+                return;
+            }
+
+            try {
+                const imageUrl = await this.readFileAsDataUrl(file);
+                if (imageInput) {
+                    imageInput.value = imageUrl;
+                }
+                this.updateSourceImagePreview(imageUrl);
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            } finally {
+                e.target.value = '';
+            }
+        });
+
+        this.updateSourceImagePreview(imageInput?.value || '');
+    }
+
     detectImportedImageUrl(rawUrl) {
         const value = String(rawUrl || '').trim();
         if (!value) return '';
@@ -605,10 +674,11 @@ class App {
 
                 if (sourceData.imageUrl && imageInput && !imageInput.value.trim()) {
                     imageInput.value = sourceData.imageUrl;
+                    this.updateSourceImagePreview(sourceData.imageUrl);
                 }
 
                 status.textContent = sourceData.imageUrl
-                    ? `✅ Extracted ${sourceData.content.length} characters from ${file.name} and found a cover image`
+                    ? `✅ Extracted ${sourceData.content.length} characters from ${file.name} and found an article image`
                     : `✅ Extracted ${sourceData.content.length} characters from ${file.name}`;
                 status.style.color = 'var(--success)';
             } catch (err) {
@@ -616,6 +686,196 @@ class App {
                 status.style.color = 'var(--danger)';
             }
         });
+    }
+
+    sourceTitleFromText(text = '') {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return 'Untitled Text';
+        const firstLine = trimmed.split(/\r?\n/).find(line => line.trim()) || trimmed;
+        return firstLine.trim().slice(0, 72);
+    }
+
+    buildSourceDraft(source = {}) {
+        return {
+            title: String(source.title || '').trim() || this.sourceTitleFromText(source.content || ''),
+            content: String(source.content || ''),
+            imageUrl: String(source.imageUrl || '').trim(),
+            sourceType: source.sourceType || 'article',
+            language: String(source.language || '').trim() || 'Japanese',
+            tags: Array.isArray(source.tags) ? source.tags.filter(Boolean) : []
+        };
+    }
+
+    async saveSource(source, opts = {}) {
+        const draft = this.buildSourceDraft(source);
+        if (!draft.title || !draft.content.trim()) {
+            throw new Error('A title and article content are required.');
+        }
+
+        await this.db.addSource(draft);
+
+        if (opts.closeModal) {
+            this.closeModal();
+        }
+
+        if (opts.toastMessage !== false) {
+            this.showToast(opts.toastMessage || 'Text added to library!', 'success');
+        }
+
+        this.scheduleAutoBackup(opts.backupReason || 'source add');
+
+        if (this.currentView === 'library') await this.renderLibrary();
+        if (this.currentView === 'dashboard') await this.renderDashboard();
+        if (this.currentView === 'vocab') await this.renderVocab();
+    }
+
+    async importDroppedSources(dataTransfer) {
+        const files = Array.from(dataTransfer?.files || []);
+        const sourceFiles = files.filter(file => !this.isImageFile(file));
+        const imageFiles = files.filter(file => this.isImageFile(file));
+
+        if (sourceFiles.length > 0) {
+            const pairedImageUrls = [];
+
+            if (imageFiles.length === sourceFiles.length || (sourceFiles.length === 1 && imageFiles.length === 1)) {
+                for (const file of imageFiles) {
+                    pairedImageUrls.push(await this.readFileAsDataUrl(file));
+                }
+            }
+
+            for (const [index, file] of sourceFiles.entries()) {
+                const sourceData = await this.extractSourceDataFromFile(file);
+                const imageUrl = sourceData.imageUrl || pairedImageUrls[index] || (sourceFiles.length === 1 ? pairedImageUrls[0] : '') || '';
+                await this.saveSource({
+                    title: file.name.replace(/\.[^.]+$/, ''),
+                    content: sourceData.content,
+                    imageUrl,
+                    sourceType: 'article',
+                    language: 'Japanese'
+                }, {
+                    toastMessage: false,
+                    backupReason: 'source drop import'
+                });
+            }
+
+            return { addedCount: sourceFiles.length, mode: 'files' };
+        }
+
+        const droppedText = String(dataTransfer?.getData('text/plain') || '').trim();
+        if (droppedText) {
+            this.showAddSourceModal({
+                title: this.sourceTitleFromText(droppedText),
+                content: droppedText,
+                sourceType: 'article'
+            });
+            return { addedCount: 0, mode: 'text' };
+        }
+
+        return { addedCount: 0, mode: 'unsupported' };
+    }
+
+    bindLibraryDropzone(view) {
+        const dropzone = view.querySelector('#library-dropzone');
+        if (!dropzone) return;
+
+        const setDragging = (active) => {
+            dropzone.classList.toggle('is-dragover', !!active);
+        };
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropzone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                setDragging(true);
+            });
+        });
+
+        ['dragleave', 'dragend'].forEach(eventName => {
+            dropzone.addEventListener(eventName, () => setDragging(false));
+        });
+
+        dropzone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            setDragging(false);
+
+            try {
+                const result = await this.importDroppedSources(e.dataTransfer);
+                if (result.mode === 'files') {
+                    this.showToast(`${result.addedCount} text${result.addedCount === 1 ? '' : 's'} added to the library.`, 'success');
+                } else if (result.mode === 'text') {
+                    this.showToast('Dropped text loaded. Review it and save when ready.', 'success');
+                } else {
+                    this.showToast('Drop a supported text file, PDF, HTML file, or plain text.', 'error');
+                }
+            } catch (err) {
+                this.showToast(`Drop import failed: ${err.message}`, 'error');
+            }
+        });
+    }
+
+    buildRecentActivity(sources, items, readingNotes, sourceMap = {}) {
+        const activities = [];
+
+        for (const source of sources) {
+            activities.push({
+                type: 'source',
+                id: source.id,
+                sourceId: source.id,
+                ts: source.createdAt || 0,
+                icon: '📚',
+                label: 'Added text',
+                title: source.title,
+                subtitle: [source.sourceType, source.language].filter(Boolean).join(' · ')
+            });
+        }
+
+        for (const item of items) {
+            activities.push({
+                type: 'highlight',
+                id: item.id,
+                sourceId: item.sourceId || '',
+                ts: item.createdAt || 0,
+                icon: '📝',
+                label: 'Saved item',
+                title: item.text,
+                subtitle: [item.category || 'General', this.getSourceLabel(item, sourceMap)].filter(Boolean).join(' · ')
+            });
+        }
+
+        for (const note of readingNotes) {
+            const sourceLabel = note.sourceId ? (sourceMap[note.sourceId]?.title || 'Text') : 'Text';
+            activities.push({
+                type: 'reading-note',
+                id: note.id,
+                sourceId: note.sourceId || '',
+                ts: note.createdAt || 0,
+                icon: '📌',
+                label: 'Added note',
+                title: note.note || note.text,
+                subtitle: sourceLabel
+            });
+        }
+
+        return activities.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 10);
+    }
+
+    async openActivity(activity) {
+        if (activity.type === 'source') {
+            await this.openReader(activity.sourceId);
+            return;
+        }
+
+        if (activity.type === 'highlight') {
+            await this.showHighlightDetailModal(activity.id);
+            return;
+        }
+
+        if (activity.type === 'reading-note') {
+            if (this.currentSource?.id !== activity.sourceId) {
+                await this.navigate('reader', { sourceId: activity.sourceId });
+            }
+            await this.showReadingNoteDetail(activity.id, activity.sourceId);
+        }
     }
 
     async deleteSourceWithConfirm(sourceId) {
@@ -1374,13 +1634,19 @@ class App {
     }
 
     async renderDashboard() {
-        const stats = await this.db.getStats();
-        const items = await this.db.getAllHighlights();
-        const recent = [...items].sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
+        const [stats, items, sources, readingNotes] = await Promise.all([
+            this.db.getStats(),
+            this.db.getAllHighlights(),
+            this.db.getAllSources(),
+            this.db.getAllReadingNotes()
+        ]);
+        const sourceMap = {};
+        for (const source of sources) sourceMap[source.id] = source;
+        const recentActivity = this.buildRecentActivity(sources, items, readingNotes, sourceMap);
         const backupReminder = BackupUtils.getBackupReminder({
             totalSources: stats.totalSources,
             totalHighlights: stats.totalHighlights,
-            totalReadingNotes: 0,
+            totalReadingNotes: readingNotes.length,
             lastBackupAt: this.backupState.lastBackupAt,
             thresholdMs: this.backupState.backupThresholdMs
         });
@@ -1463,22 +1729,27 @@ class App {
                 <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
             </div>
 
-            ${recent.length > 0 ? `
-                <div class="section-title">Recently Added</div>
+            ${recentActivity.length > 0 ? `
+                <div class="section-title">Recent Activity</div>
                 <div class="recent-list">
-                    ${recent.map(item => `
-                        <div class="recent-item" data-hl-id="${item.id}">
-                            <span class="hl-type-dot dot-item"></span>
-                            <span class="ri-text">${this.esc(item.text)}</span>
-                            <span class="ri-chip">${this.esc(item.category || 'General')}</span>
-                            <span class="ri-meta">${item.charCount || item.text.length} chars</span>
+                    ${recentActivity.map(activity => `
+                        <div class="recent-item" data-activity-type="${activity.type}" data-activity-id="${activity.id}" data-source-id="${activity.sourceId || ''}">
+                            <span class="recent-item-icon">${activity.icon}</span>
+                            <div class="ri-main">
+                                <div class="ri-topline">
+                                    <span class="ri-chip">${this.esc(activity.label)}</span>
+                                    ${activity.subtitle ? `<span class="ri-subtext">${this.esc(activity.subtitle)}</span>` : ''}
+                                </div>
+                                <span class="ri-text">${this.esc(activity.title)}</span>
+                            </div>
+                            <span class="ri-meta">${this.relativeTime(activity.ts)}</span>
                         </div>
                     `).join('')}
                 </div>
             ` : `
                 <div class="empty-state">
-                    <div class="empty-icon">📝</div>
-                    <p>No study items yet. Add your first text-note pair and start reviewing.</p>
+                    <div class="empty-icon">🕘</div>
+                    <p>No activity yet. Add a text, save an item, or drop a file into the library to get started.</p>
                 </div>
             `}
         `;
@@ -1499,7 +1770,13 @@ class App {
             }
         });
         view.querySelectorAll('.recent-item').forEach(item => {
-            item.addEventListener('click', () => this.showHighlightDetailModal(parseInt(item.dataset.hlId, 10)));
+            item.addEventListener('click', async () => {
+                await this.openActivity({
+                    type: item.dataset.activityType,
+                    id: parseInt(item.dataset.activityId, 10),
+                    sourceId: item.dataset.sourceId ? parseInt(item.dataset.sourceId, 10) : null
+                });
+            });
         });
     }
 
@@ -1521,6 +1798,11 @@ class App {
                     <span style="color:var(--text-secondary);font-size:0.85rem;">${sorted.length} texts</span>
                     <button class="btn btn-primary" id="lib-add">➕ Add Text</button>
                 </div>
+            </div>
+
+            <div class="library-dropzone" id="library-dropzone">
+                <div class="library-dropzone-title">Drop files or text here</div>
+                <p>Drop text files, PDFs, HTML, or pasted text to add them to the library. If you drop one image with one article file, it becomes the article image. Single-click a card to read it, double-click to edit it.</p>
             </div>
 
             ${sorted.length === 0 ? `
@@ -1572,7 +1854,28 @@ class App {
         view.querySelectorAll('.source-card').forEach(card => {
             card.addEventListener('click', (e) => {
                 if (e.target.closest('.icon-action-btn')) return;
-                this.openReader(parseInt(card.dataset.id, 10));
+
+                clearTimeout(this._libraryCardClickTimer);
+                const sourceId = parseInt(card.dataset.id, 10);
+                this._libraryCardClickTimer = setTimeout(() => {
+                    this.openReader(sourceId);
+                    this._libraryCardClickTimer = null;
+                }, 220);
+            });
+
+            card.addEventListener('dblclick', (e) => {
+                if (e.target.closest('.icon-action-btn')) return;
+
+                clearTimeout(this._libraryCardClickTimer);
+                this._libraryCardClickTimer = null;
+                const sourceId = parseInt(card.dataset.id, 10);
+                const source = sorted.find(entry => entry.id === sourceId);
+                if (source) {
+                    this.showEditSourceModal({
+                        ...source,
+                        tags: [...(source.tags || [])]
+                    });
+                }
             });
         });
         view.querySelectorAll('.icon-action-btn[data-source-action]').forEach(button => {
@@ -1594,39 +1897,45 @@ class App {
                 await this.deleteSourceWithConfirm(sourceId);
             });
         });
+        this.bindLibraryDropzone(view);
         this.bindSourceImageFallback(view);
     }
 
-    showAddSourceModal() {
+    showAddSourceModal(initialData = {}) {
         this.showModal(`
             <h3>📝 Add New Text</h3>
             <form id="add-source-form">
                 <div class="form-group">
                     <label>Title</label>
-                    <input type="text" id="src-title" placeholder="e.g., NHK News Article, Podcast Ep. 42..." required>
+                    <input type="text" id="src-title" value="${this.esc(initialData.title || '')}" placeholder="e.g., NHK News Article, Podcast Ep. 42..." required>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Source Type</label>
                         <select id="src-type">
-                            <option value="article">📄 Article</option>
-                            <option value="audio">🎧 Audio Transcript</option>
-                            <option value="video">🎬 Video Subtitle</option>
-                            <option value="other">📋 Other</option>
+                            <option value="article" ${initialData.sourceType === 'article' || !initialData.sourceType ? 'selected' : ''}>📄 Article</option>
+                            <option value="audio" ${initialData.sourceType === 'audio' ? 'selected' : ''}>🎧 Audio Transcript</option>
+                            <option value="video" ${initialData.sourceType === 'video' ? 'selected' : ''}>🎬 Video Subtitle</option>
+                            <option value="other" ${initialData.sourceType === 'other' ? 'selected' : ''}>📋 Other</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Language</label>
-                        <input type="text" id="src-lang" placeholder="e.g., Japanese" value="Japanese">
+                        <input type="text" id="src-lang" placeholder="e.g., Japanese" value="${this.esc(initialData.language || 'Japanese')}">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>Tags <span class="form-hint">(comma-separated)</span></label>
-                    <input type="text" id="src-tags" placeholder="e.g., N3, news, conversation">
+                    <input type="text" id="src-tags" value="${this.esc((initialData.tags || []).join(', '))}" placeholder="e.g., N3, news, conversation">
                 </div>
                 <div class="form-group">
-                    <label>Cover Image URL <span class="form-hint">optional, shown in the library card when available</span></label>
-                    <input type="url" id="src-image" placeholder="https://example.com/article-cover.jpg">
+                    <label>Article Image URL <span class="form-hint">optional, shown in the library and reader</span></label>
+                    <input type="url" id="src-image" value="${this.esc(initialData.imageUrl || '')}" placeholder="https://example.com/article-image.jpg">
+                </div>
+                <div class="form-group">
+                    <label>Upload Article Image <span class="form-hint">optional image file</span></label>
+                    <input type="file" id="src-image-upload" accept="image/*">
+                    <div id="src-image-preview" class="hidden"></div>
                 </div>
                 <div class="form-group">
                     <label>Upload File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
@@ -1635,7 +1944,7 @@ class App {
                 </div>
                 <div class="form-group">
                     <label>Content</label>
-                    <textarea id="src-content" rows="10" placeholder="Paste your text content here or upload a file above..." required></textarea>
+                    <textarea id="src-content" rows="10" placeholder="Paste your text content here or upload a file above..." required>${this.esc(initialData.content || '')}</textarea>
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="src-cancel">Cancel</button>
@@ -1645,6 +1954,7 @@ class App {
         `, { size: 'modal-lg' });
 
         this.bindSourceFileUpload();
+        this.bindSourceImageControls();
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('add-source-form').addEventListener('submit', async (e) => {
@@ -1658,20 +1968,14 @@ class App {
                 .map(tag => tag.trim())
                 .filter(Boolean);
 
-            await this.db.addSource({
+            await this.saveSource({
                 title,
                 content,
                 imageUrl: document.getElementById('src-image').value.trim(),
                 sourceType: document.getElementById('src-type').value,
                 language: document.getElementById('src-lang').value.trim(),
                 tags
-            });
-
-            this.closeModal();
-            this.showToast('Text added to library!', 'success');
-            this.scheduleAutoBackup('source add');
-            if (this.currentView === 'library') this.renderLibrary();
-            if (this.currentView === 'dashboard') this.renderDashboard();
+            }, { closeModal: true, backupReason: 'source add' });
         });
     }
 
@@ -2138,8 +2442,13 @@ class App {
                     <input type="text" id="src-tags" value="${this.esc((latestSource.tags || []).join(', '))}">
                 </div>
                 <div class="form-group">
-                    <label>Cover Image URL <span class="form-hint">optional, shown in the library card when available</span></label>
-                    <input type="url" id="src-image" value="${this.esc(latestSource.imageUrl || '')}" placeholder="https://example.com/article-cover.jpg">
+                    <label>Article Image URL <span class="form-hint">optional, shown in the library and reader</span></label>
+                    <input type="url" id="src-image" value="${this.esc(latestSource.imageUrl || '')}" placeholder="https://example.com/article-image.jpg">
+                </div>
+                <div class="form-group">
+                    <label>Upload Article Image <span class="form-hint">optional image file</span></label>
+                    <input type="file" id="src-image-upload" accept="image/*">
+                    <div id="src-image-preview" class="hidden"></div>
                 </div>
                 <div class="form-group">
                     <label>Replace From File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
@@ -2163,6 +2472,7 @@ class App {
         `, { size: 'modal-lg' });
 
         this.bindSourceFileUpload();
+        this.bindSourceImageControls();
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('edit-source-form').addEventListener('submit', async (e) => {
@@ -2281,8 +2591,9 @@ class App {
         });
     }
 
-    async showReadingNoteDetail(noteId) {
-        const notes = await this.db.getReadingNotesBySource(this.currentSource.id);
+    async showReadingNoteDetail(noteId, sourceId = this.currentSource?.id) {
+        if (!Number.isFinite(sourceId)) return;
+        const notes = await this.db.getReadingNotesBySource(sourceId);
         const note = notes.find(n => n.id === noteId);
         if (!note) return;
 
