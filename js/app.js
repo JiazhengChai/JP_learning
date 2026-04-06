@@ -30,6 +30,8 @@ class App {
         this._toastTimer = null;
         this._autoBackupTimer = null;
         this._libraryCardClickTimer = null;
+        this._readerJumpTimer = null;
+        this._readerJumpTarget = null;
         this.migrationNotice = null;
     }
 
@@ -2011,8 +2013,52 @@ class App {
         return sourceData.content;
     }
 
-    async openReader(sourceId) {
+    async openReader(sourceId, focus = null) {
         await this.navigate('reader', { sourceId });
+        if (focus) {
+            this.focusReaderTarget(focus);
+        }
+    }
+
+    focusReaderTarget(target = {}) {
+        if (this.currentView !== 'reader' || !this.currentSource) return false;
+
+        const readerContent = document.getElementById('reader-content');
+        if (!readerContent) return false;
+
+        let selector = '';
+        if (Number.isFinite(target.highlightId)) {
+            selector = `.hl[data-hl-id="${target.highlightId}"]`;
+        } else if (Number.isFinite(target.noteId)) {
+            selector = `.hl-reading-note[data-note-id="${target.noteId}"]`;
+        }
+
+        if (!selector) return false;
+
+        const element = readerContent.querySelector(selector);
+        if (!element) return false;
+
+        if (this._readerJumpTimer) {
+            clearTimeout(this._readerJumpTimer);
+            this._readerJumpTimer = null;
+        }
+
+        if (this._readerJumpTarget && this._readerJumpTarget !== element) {
+            this._readerJumpTarget.classList.remove('reader-jump-target');
+        }
+
+        this._readerJumpTarget = element;
+        element.classList.add('reader-jump-target');
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+
+        this._readerJumpTimer = setTimeout(() => {
+            element.classList.remove('reader-jump-target');
+            if (this._readerJumpTarget === element) {
+                this._readerJumpTarget = null;
+            }
+        }, 1600);
+
+        return true;
     }
 
     async renderReader() {
@@ -2050,8 +2096,10 @@ class App {
                     <h3>Saved Items (${items.length})</h3>
                     <div id="reader-hl-list">
                         ${items.length === 0 ? '<p style="color:var(--text-muted);font-size:0.82rem;">Select text, then save it as a study item.</p>' : ''}
-                        ${items.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(item => `
-                            <div class="hl-list-item" data-hl-id="${item.id}">
+                        ${items.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(item => {
+                            const canJump = Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset);
+                            return `
+                            <div class="hl-list-item" data-hl-id="${item.id}" title="${canJump ? 'Jump to this item in the article' : 'Open item details'}">
                                 <div class="hl-text">
                                     <span class="hl-type-dot dot-item"></span>
                                     ${this.esc(item.text)}
@@ -2059,19 +2107,23 @@ class App {
                                 <div class="hl-meta-line">${this.esc(item.category || 'General')} · ${item.charCount || item.text.length} chars</div>
                                 ${item.note ? `<div class="hl-note">${this.esc(item.note)}</div>` : ''}
                             </div>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </div>
                     ${readingNotes.length > 0 ? `
                         <h3 style="margin-top:20px;">📌 Reading Notes (${readingNotes.length})</h3>
                         <div id="reader-notes-list">
-                            ${readingNotes.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(note => `
-                                <div class="hl-list-item reading-note-item" data-note-id="${note.id}">
+                            ${readingNotes.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(note => {
+                                const canJump = Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+                                return `
+                                <div class="hl-list-item reading-note-item" data-note-id="${note.id}" title="${canJump ? 'Jump to this note in the article' : 'Open note details'}">
                                     <div class="hl-text" style="color:var(--${note.color === 'blue' ? 'accent' : note.color === 'green' ? 'success' : note.color === 'red' ? 'danger' : 'warning'});">
                                         📌 ${this.esc(note.text.substring(0, 40))}${note.text.length > 40 ? '…' : ''}
                                     </div>
                                     <div class="hl-note">${this.esc(note.note)}</div>
                                 </div>
-                            `).join('')}
+                            `;
+                            }).join('')}
                         </div>
                     ` : ''}
                 </div>
@@ -2096,7 +2148,16 @@ class App {
         });
 
         view.querySelectorAll('.hl-list-item[data-hl-id]').forEach(item => {
-            item.addEventListener('click', () => this.showHighlightDetailModal(parseInt(item.dataset.hlId, 10)));
+            item.addEventListener('click', async () => {
+                const hlId = parseInt(item.dataset.hlId, 10);
+                const highlight = items.find(entry => entry.id === hlId);
+                if (Number.isFinite(highlight?.startOffset) && Number.isFinite(highlight?.endOffset)) {
+                    await this.openReader(source.id, { highlightId: hlId });
+                    return;
+                }
+
+                this.showHighlightDetailModal(hlId);
+            });
         });
         view.querySelectorAll('.hl[data-hl-id]').forEach(span => {
             span.addEventListener('click', (e) => {
@@ -2105,7 +2166,16 @@ class App {
             });
         });
         view.querySelectorAll('.reading-note-item').forEach(item => {
-            item.addEventListener('click', () => this.showReadingNoteDetail(parseInt(item.dataset.noteId, 10)));
+            item.addEventListener('click', async () => {
+                const noteId = parseInt(item.dataset.noteId, 10);
+                const note = readingNotes.find(entry => entry.id === noteId);
+                if (Number.isFinite(note?.startOffset) && Number.isFinite(note?.endOffset)) {
+                    await this.openReader(source.id, { noteId });
+                    return;
+                }
+
+                this.showReadingNoteDetail(noteId, source.id);
+            });
         });
         view.querySelectorAll('.hl-reading-note[data-note-id]').forEach(span => {
             span.addEventListener('click', (e) => {
@@ -2356,6 +2426,8 @@ class App {
         const item = await this.db.getHighlight(hlId);
         if (!item) return;
         const source = item.sourceId ? await this.db.getSource(item.sourceId) : null;
+        const canJumpToSource = !!source;
+        const canJumpToItem = Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset);
 
         this.showModal(`
             <h3>📝 Study Item</h3>
@@ -2371,6 +2443,7 @@ class App {
                 ${item.context ? `<div><strong>Context:</strong> <span class="detail-context">${this.esc(item.context)}</span></div>` : ''}
             </div>
             <div class="form-actions">
+                ${canJumpToSource ? '<button class="btn btn-secondary" id="hl-open-source">Open in Reader</button>' : ''}
                 <button class="btn btn-danger btn-sm" id="hl-delete">🗑️ Delete</button>
                 <button class="btn btn-secondary" id="hl-edit">✏️ Edit</button>
                 <button class="btn btn-primary" id="hl-close">Close</button>
@@ -2378,6 +2451,10 @@ class App {
         `);
 
         document.getElementById('hl-close').addEventListener('click', () => this.closeModal());
+        document.getElementById('hl-open-source')?.addEventListener('click', async () => {
+            this.closeModal();
+            await this.openReader(source.id, canJumpToItem ? { highlightId: item.id } : null);
+        });
         document.getElementById('hl-delete').addEventListener('click', async () => {
             await this.deleteHighlightWithConfirm(hlId, { item, closeModal: true });
         });
@@ -2633,24 +2710,35 @@ class App {
 
     async showReadingNoteDetail(noteId, sourceId = this.currentSource?.id) {
         if (!Number.isFinite(sourceId)) return;
-        const notes = await this.db.getReadingNotesBySource(sourceId);
+        const [source, notes] = await Promise.all([
+            this.db.getSource(sourceId),
+            this.db.getReadingNotesBySource(sourceId)
+        ]);
         const note = notes.find(n => n.id === noteId);
         if (!note) return;
+        const canJumpToSource = !!source;
+        const canJumpToNote = Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
 
         this.showModal(`
             <h3>📌 Reading Note</h3>
             <div class="selected-text-preview">${this.esc(note.text)}</div>
             <div class="detail-stack">
                 <div>${this.esc(note.note)}</div>
+                ${source ? `<div><strong>Source:</strong> ${this.esc(source.title)}</div>` : ''}
                 <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${this.formatDateTime(note.createdAt)}</div>
             </div>
             <div class="form-actions">
+                ${canJumpToSource ? '<button class="btn btn-secondary" id="rn-open-source">Open in Reader</button>' : ''}
                 <button class="btn btn-danger btn-sm" id="rn-delete">🗑️ Delete</button>
                 <button class="btn btn-primary" id="rn-close">Close</button>
             </div>
         `);
 
         document.getElementById('rn-close').addEventListener('click', () => this.closeModal());
+        document.getElementById('rn-open-source')?.addEventListener('click', async () => {
+            this.closeModal();
+            await this.openReader(source.id, canJumpToNote ? { noteId: note.id } : null);
+        });
         document.getElementById('rn-delete').addEventListener('click', async () => {
             if (!confirm('Delete this reading note?')) return;
             await this.db.deleteReadingNote(noteId);

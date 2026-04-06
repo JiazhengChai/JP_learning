@@ -760,6 +760,13 @@ nav { flex: 1; padding: 12px 0; }
     border-bottom: 2px dashed var(--danger);
 }
 
+.reader-jump-target {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.12);
+    scroll-margin-block: 24px;
+}
+
 /* === Modal === */
 .modal-overlay {
     position: fixed;
