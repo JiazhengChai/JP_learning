@@ -108,6 +108,10 @@ class Database {
         return 'vocab';
     }
 
+    _normalizeTextContent(value = '') {
+        return String(value ?? '').replace(/\r\n?/g, '\n');
+    }
+
     _normalizeHighlight(highlight = {}, opts = {}) {
         const text = String(highlight.text || '').trim();
         const note = String(highlight.note || highlight.reading || '').trim();
@@ -138,6 +142,7 @@ class Database {
     _normalizeSource(source = {}, opts = {}) {
         return {
             ...source,
+            content: this._normalizeTextContent(source.content),
             imageUrl: String(source.imageUrl || '').trim(),
             createdAt: source.createdAt || Date.now(),
             updatedAt: opts.touch ? Date.now() : (source.updatedAt || source.createdAt || Date.now()),
@@ -277,12 +282,14 @@ class Database {
 
     async getSource(id) {
         const store = this._store('sources', 'readonly');
-        return this._req(store, 'get', id);
+        const source = await this._req(store, 'get', id);
+        return source ? this._normalizeSource(source) : source;
     }
 
     async getAllSources() {
         const store = this._store('sources', 'readonly');
-        return this._req(store, 'getAll');
+        const sources = await this._req(store, 'getAll');
+        return sources.map(source => this._normalizeSource(source));
     }
 
     async updateSource(source) {

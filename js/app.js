@@ -484,6 +484,33 @@ class App {
         overlay.classList.remove('hidden');
     }
 
+    bindEnterToSubmit(form) {
+        if (!form) return;
+
+        form.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) {
+                return;
+            }
+
+            const target = e.target;
+            if (!(target instanceof HTMLElement) || !target.matches('input, textarea')) {
+                return;
+            }
+
+            e.preventDefault();
+
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+                return;
+            }
+
+            const submitButton = form.querySelector('[type="submit"]');
+            if (submitButton instanceof HTMLElement) {
+                submitButton.click();
+            }
+        });
+    }
+
     closeModal() {
         document.getElementById('modal-overlay').classList.add('hidden');
     }
@@ -2278,6 +2305,7 @@ class App {
             });
         });
 
+        this.bindEnterToSubmit(document.getElementById('item-form'));
         document.getElementById('item-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('item-text')?.addEventListener('input', (e) => {
             const suggested = this.suggestCategory(e.target.value);
@@ -2577,6 +2605,7 @@ class App {
             });
         });
 
+        this.bindEnterToSubmit(document.getElementById('reading-note-form'));
         document.getElementById('rn-cancel').addEventListener('click', () => this.closeModal());
         document.getElementById('reading-note-form').addEventListener('submit', async (e) => {
             e.preventDefault();

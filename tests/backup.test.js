@@ -227,6 +227,26 @@ test('source imageUrl is normalized and included in exports', async () => {
     db.db.close();
 });
 
+test('source content is normalized to LF on read and export', async () => {
+    const db = await freshDatabase();
+    const sourceId = await db.addSource({
+        title: 'Line endings',
+        content: 'First line\r\nSecond line\r\nThird line',
+        sourceType: 'article',
+        language: 'Japanese'
+    });
+
+    const source = await db.getSource(sourceId);
+    const [listed] = await db.getAllSources();
+    const exported = await db.exportAll();
+
+    assert.equal(source.content, 'First line\nSecond line\nThird line');
+    assert.equal(listed.content, 'First line\nSecond line\nThird line');
+    assert.equal(exported.sources[0].content, 'First line\nSecond line\nThird line');
+
+    db.db.close();
+});
+
 test('clearSourceAnnotationOffsets keeps linked records but removes inline positions', async () => {
     const db = await freshDatabase();
     const sourceId = await db.addSource({
