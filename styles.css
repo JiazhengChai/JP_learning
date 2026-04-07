@@ -285,7 +285,8 @@ nav { flex: 1; padding: 12px 0; }
     gap: 8px;
 }
 .sidebar-footer-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
 }
 .backup-footer-status {
@@ -308,6 +309,15 @@ nav { flex: 1; padding: 12px 0; }
     background: var(--bg-card);
     color: var(--text);
     border-color: var(--text-muted);
+}
+.btn-subtle-primary {
+    color: var(--accent);
+    border-color: rgba(88, 166, 255, 0.32);
+}
+.btn-subtle-primary:hover {
+    background: rgba(88, 166, 255, 0.08);
+    color: var(--accent);
+    border-color: rgba(88, 166, 255, 0.5);
 }
 .btn-subtle-full {
     width: 100%;

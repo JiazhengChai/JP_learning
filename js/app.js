@@ -580,6 +580,9 @@ class App {
         });
 
         document.getElementById('btn-theme')?.addEventListener('click', () => this.toggleTheme());
+        document.getElementById('btn-quick-backup')?.addEventListener('click', async () => {
+            await this.saveQuickEncryptedBackup();
+        });
         document.getElementById('btn-export').addEventListener('click', () => this.showBackupCenter());
         document.getElementById('btn-import').addEventListener('click', () => {
             document.getElementById('import-file').click();
@@ -1790,14 +1793,51 @@ class App {
     }
 
     async createLatestBackupNow() {
-        await this.refreshBackupState();
+        await this.saveQuickEncryptedBackup({ useLatestName: true });
+    }
 
-        if (this.backupState.folderHandle && await this.getFolderPermission(this.backupState.folderHandle, false) === 'granted') {
-            await this.writeBackupToFolder({ encrypted: true, useLatestName: true, promptForDirectory: false });
-            return;
+    async saveQuickEncryptedBackup(options = {}) {
+        try {
+            await this.refreshBackupState();
+            const useLatestName = !!options.useLatestName;
+
+            let saved = false;
+
+            if (this.backupState.folderHandle && await this.getFolderPermission(this.backupState.folderHandle, false) === 'granted') {
+                saved = await this.writeBackupToFolder({
+                    encrypted: true,
+                    useLatestName,
+                    promptForDirectory: false
+                });
+            } else if (this.backupState.fileSaveSupported) {
+                saved = await this.writeBackupWithSavePicker({
+                    encrypted: true,
+                    useLatestName
+                });
+            } else if (this.backupState.fsAccessSupported) {
+                saved = await this.writeBackupToFolder({
+                    encrypted: true,
+                    useLatestName,
+                    promptForDirectory: true
+                });
+            } else {
+                const backup = await this.createBackupPackage({ encrypted: true });
+                const fileName = this.getBackupFileName({ encrypted: true, latest: useLatestName });
+                this.downloadText(this.stringifyBackupFile(backup), fileName);
+                this.recordBackupEvent('download-encrypted');
+                this.showToast('Encrypted backup downloaded to the browser location.', 'success');
+                saved = true;
+            }
+
+            if (saved && this.currentView === 'dashboard') {
+                await this.renderDashboard();
+            }
+
+            return saved;
+        } catch (err) {
+            this.showToast(`Backup failed: ${err.message}`, 'error');
+            return false;
         }
-
-        await this.exportData({ encrypted: true, useLatestName: true });
     }
 
     async promptToEnableAutoBackupAfterRestore() {
