@@ -581,12 +581,6 @@ class App {
 
         document.getElementById('btn-theme')?.addEventListener('click', () => this.toggleTheme());
         document.getElementById('btn-export').addEventListener('click', () => this.showBackupCenter());
-        document.getElementById('quick-backup-button')?.addEventListener('click', async () => {
-            await this.saveQuickEncryptedBackup();
-        });
-        document.getElementById('quick-backup-center')?.addEventListener('click', async () => {
-            await this.showBackupCenter();
-        });
         document.getElementById('btn-import').addEventListener('click', () => {
             document.getElementById('import-file').click();
         });
@@ -1430,48 +1424,10 @@ class App {
         localStorage.setItem('langlens-last-restore-source', this.backupState.lastRestoreSource);
     }
 
-    getQuickBackupActionLabel() {
-        return (this.backupState.fsAccessSupported || this.backupState.fileSaveSupported)
-            ? '💾 Save Encrypted JSON'
-            : '⬇ Download Encrypted JSON';
-    }
-
-    getQuickBackupHint() {
-        const recentLine = this.backupState.lastBackupAt
-            ? `Last backup ${this.relativeTime(this.backupState.lastBackupAt)}.`
-            : 'No backup saved yet.';
-
-        if (this.hasAutoBackupTarget()) {
-            return `${recentLine} One click saves encrypted JSON to ${this.backupState.folderName || 'the selected sync folder'}.`;
-        }
-
-        if (this.backupState.fileSaveSupported) {
-            return `${recentLine} One click opens a save prompt for encrypted JSON.`;
-        }
-
-        if (this.backupState.fsAccessSupported) {
-            return `${recentLine} One click picks a folder, then writes encrypted JSON.`;
-        }
-
-        return `${recentLine} One click downloads encrypted JSON to the browser location.`;
-    }
-
-    updateQuickBackupDock() {
-        const button = document.getElementById('quick-backup-button');
-        const hint = document.getElementById('quick-backup-hint');
-
-        if (button) {
-            button.textContent = this.getQuickBackupActionLabel();
-            button.title = this.getQuickBackupHint();
-        }
-
-        if (hint) {
-            hint.textContent = this.getQuickBackupHint();
-        }
-    }
-
     updateBackupFooter() {
         const node = document.getElementById('backup-footer-status');
+        if (!node) return;
+
         const storageLine = this.backupState.persistSupported
             ? (this.backupState.persisted ? 'Persistent storage enabled' : 'Persistent storage not granted')
             : 'Persistent storage unavailable';
@@ -1486,11 +1442,7 @@ class App {
             : 'Auto-backup off';
         const fileLine = this.describeRecentBackupFileLine();
 
-        if (node) {
-            node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(autoLine)}</div><div>${this.esc(fileLine)}</div>`;
-        }
-
-        this.updateQuickBackupDock();
+        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(autoLine)}</div><div>${this.esc(fileLine)}</div>`;
     }
 
     async refreshBackupState() {
@@ -1644,12 +1596,6 @@ class App {
         }
 
         this.updateBackupFooter();
-
-        if (this.currentView === 'dashboard') {
-            this.renderDashboard().catch(err => {
-                console.error('Failed to refresh dashboard after backup:', err);
-            });
-        }
     }
 
     async getRestoreCandidateFromFolder(handle) {
@@ -1844,47 +1790,14 @@ class App {
     }
 
     async createLatestBackupNow() {
-        await this.saveQuickEncryptedBackup({ useLatestName: true });
-    }
+        await this.refreshBackupState();
 
-    async saveQuickEncryptedBackup(options = {}) {
-        try {
-            await this.refreshBackupState();
-            const useLatestName = !!options.useLatestName;
-
-            if (this.hasAutoBackupTarget()) {
-                return await this.writeBackupToFolder({
-                    encrypted: true,
-                    useLatestName,
-                    promptForDirectory: false
-                });
-            }
-
-            if (this.backupState.fileSaveSupported) {
-                return await this.writeBackupWithSavePicker({
-                    encrypted: true,
-                    useLatestName
-                });
-            }
-
-            if (this.backupState.fsAccessSupported) {
-                return await this.writeBackupToFolder({
-                    encrypted: true,
-                    useLatestName,
-                    promptForDirectory: true
-                });
-            }
-
-            const backup = await this.createBackupPackage({ encrypted: true });
-            const fileName = this.getBackupFileName({ encrypted: true, latest: useLatestName });
-            this.downloadText(this.stringifyBackupFile(backup), fileName);
-            this.recordBackupEvent('download-encrypted');
-            this.showToast('Encrypted backup downloaded to the browser location.', 'success');
-            return true;
-        } catch (err) {
-            this.showToast(`Backup failed: ${err.message}`, 'error');
-            return false;
+        if (this.backupState.folderHandle && await this.getFolderPermission(this.backupState.folderHandle, false) === 'granted') {
+            await this.writeBackupToFolder({ encrypted: true, useLatestName: true, promptForDirectory: false });
+            return;
         }
+
+        await this.exportData({ encrypted: true, useLatestName: true });
     }
 
     async promptToEnableAutoBackupAfterRestore() {

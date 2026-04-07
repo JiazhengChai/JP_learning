@@ -328,53 +328,10 @@ nav { flex: 1; padding: 12px 0; }
     overflow-y: auto;
     overflow-x: hidden;
     height: 100vh;
-    padding-bottom: 124px;
 }
 .view { padding: 32px 40px; display: none; }
 .view.active { display: block; }
 .hidden { display: none !important; }
-
-.quick-backup-dock {
-    position: fixed;
-    right: 24px;
-    bottom: 24px;
-    z-index: 400;
-    display: flex;
-    align-items: flex-end;
-    gap: 14px;
-    padding: 14px 16px;
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    background: linear-gradient(135deg, var(--bg-surface), var(--bg-card));
-    box-shadow: 0 16px 36px var(--shadow-modal);
-    max-width: min(430px, calc(100vw - 32px));
-}
-.quick-backup-copy {
-    min-width: 0;
-}
-.quick-backup-kicker {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--accent);
-}
-.quick-backup-copy p {
-    font-size: 0.78rem;
-    color: var(--text-secondary);
-    line-height: 1.45;
-}
-.quick-backup-actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-}
-.quick-backup-actions .btn {
-    justify-content: center;
-    white-space: nowrap;
-}
 
 /* === View Header === */
 .view-header {
@@ -1675,15 +1632,9 @@ nav { flex: 1; padding: 12px 0; }
         flex-direction: column;
         align-items: flex-start;
     }
-    .quick-backup-dock {
-        flex-direction: column;
-        align-items: stretch;
-        max-width: min(360px, calc(100vw - 32px));
-    }
 }
 @media (max-width: 768px) {
     #sidebar { width: 60px; }
-    #main { padding-bottom: 172px; }
     .sidebar-brand h1 { font-size: 1rem; }
     .sidebar-brand .tagline,
     .nav-link span:not(.nav-icon),
@@ -1718,20 +1669,6 @@ nav { flex: 1; padding: 12px 0; }
     }
     .backup-summary-grid {
         grid-template-columns: 1fr;
-    }
-    .quick-backup-dock {
-        left: 72px;
-        right: 12px;
-        bottom: 12px;
-        max-width: none;
-        padding: 12px;
-        border-radius: 16px;
-    }
-    .quick-backup-actions {
-        flex-direction: column;
-    }
-    .quick-backup-actions .btn {
-        width: 100%;
     }
 }
 

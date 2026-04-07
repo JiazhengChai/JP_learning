@@ -15,7 +15,6 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Capture reading notes in context and browse them later by source or color.
 - Group items into categories and keep metadata like added time and character count.
 - Review due items with a front/back flashcard workflow and filter by multiple categories, source texts, and mastery levels.
-- Save encrypted JSON in one click from the always-visible quick backup control, or open Backup for more options.
 - Export and import everything as JSON for easy backups.
 - Create encrypted backups and restore them later with a passphrase.
 - Request persistent browser storage and save backups into a chosen folder, or pick one when the browser supports it.
@@ -81,8 +80,7 @@ All app data is stored in the browser using IndexedDB. That means:
 
 ## Backup And Restore
 
-- The always-visible quick backup control saves encrypted JSON in one click.
-- Use Backup to save an encrypted backup file by default, adjust passphrases, or switch to plain JSON after the warning confirmation.
+- Use Backup to save an encrypted backup file by default. Passphrases are optional, and plain JSON now requires an explicit warning confirmation.
 - On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving.
 - On browsers without a save or folder picker, LangLens falls back to the browser's normal download flow.
 - Encrypted backups keep the saved file unreadable without the passphrase.
