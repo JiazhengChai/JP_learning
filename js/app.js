@@ -2487,7 +2487,9 @@ class App {
 
             container.innerHTML = `
                 <div class="cards-grid">
-                    ${visibleSources.map(source => `
+                    ${visibleSources.map(source => {
+                        const previewText = (source.content || '').substring(0, 200);
+                        return `
                         <div class="source-card" data-id="${source.id}">
                             ${source.imageUrl ? `
                                 <div class="source-card-image" data-source-image-shell>
@@ -2496,7 +2498,7 @@ class App {
                             ` : ''}
                             <div class="card-header">
                                 <div class="card-title-stack">
-                                    <div class="card-title">${this.esc(source.title)}</div>
+                                    <div class="card-title" title="${this.esc(source.title)}">${this.esc(source.title)}</div>
                                 </div>
                                 <div class="card-header-side">
                                     <span class="type-badge ${source.sourceType}">${source.sourceType}</span>
@@ -2506,7 +2508,7 @@ class App {
                                     </div>
                                 </div>
                             </div>
-                            <div class="card-preview">${this.esc((source.content || '').substring(0, 200))}</div>
+                            <div class="card-preview" title="${this.esc(previewText)}">${this.esc(previewText)}</div>
                             <div class="card-meta">
                                 <span>📝 ${counts[source.id] || 0} items</span>
                                 <span>${this.formatDate(source.createdAt)}</span>
@@ -2518,7 +2520,8 @@ class App {
                                 </div>
                             ` : ''}
                         </div>
-                    `).join('')}
+                    `;
+                    }).join('')}
                 </div>
             `;
 
@@ -3718,13 +3721,14 @@ class App {
                 <tbody>
                     ${items.map(item => {
                         const level = item.masteryLevel || 0;
+                        const textPreview = item.text || '—';
+                        const notePreview = item.note || '—';
                         return `
                             <tr class="vocab-row" data-hl-id="${item.id}">
                                 <td>
-                                    <div class="vocab-text">${this.esc(item.text)}</div>
-                                    ${item.context ? `<div class="vocab-context">${this.esc(item.context.substring(0, 80))}${item.context.length > 80 ? '…' : ''}</div>` : ''}
+                                    <div class="vocab-text table-preview-line" title="${this.esc(textPreview)}">${this.esc(textPreview)}</div>
                                 </td>
-                                <td>${this.esc(item.note || '—')}</td>
+                                <td><div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
                                 <td><span class="tag">${this.esc(item.category || 'General')}</span></td>
                                 <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(item, sourceMap))}</td>
                                 <td>${item.charCount || item.text.length}</td>
@@ -3770,13 +3774,15 @@ class App {
                     ${notes.map(note => {
                         const colorMeta = this.getReadingNoteColorMeta(note.color);
                         const sourceId = Number.isFinite(note.sourceId) ? note.sourceId : '';
+                        const selectedText = note.text || '—';
+                        const notePreview = note.note || '—';
                         return `
                             <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
                                 <td>
-                                    <div class="vocab-text" style="color:var(--${colorMeta.tone});">${this.esc(note.text)}</div>
+                                    <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
                                 </td>
                                 <td>
-                                    <div>${this.esc(note.note || '—')}</div>
+                                    <div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
                                 </td>
                                 <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
                                 <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
