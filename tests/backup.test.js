@@ -196,6 +196,45 @@ test('backup reminder helper flags missing and stale backups only when there is 
     assert.equal(empty.shouldShow, false);
 });
 
+test('backup filename helper recognizes rolling and timestamped backups', () => {
+    const latest = BackupUtils.parseBackupFileName('langlens-latest-backup-encrypted.json');
+    const snapshot = BackupUtils.parseBackupFileName('langlens-backup-2026-04-07_10-20-30Z.json');
+
+    assert.deepEqual(latest, {
+        name: 'langlens-latest-backup-encrypted.json',
+        kind: 'latest',
+        stamp: '',
+        encrypted: true
+    });
+    assert.deepEqual(snapshot, {
+        name: 'langlens-backup-2026-04-07_10-20-30Z.json',
+        kind: 'snapshot',
+        stamp: '2026-04-07_10-20-30Z',
+        encrypted: false
+    });
+    assert.equal(BackupUtils.parseBackupFileName('notes.json'), null);
+});
+
+test('backup filename helper prefers the rolling latest encrypted backup first', () => {
+    const choice = BackupUtils.pickPreferredBackupFile([
+        { name: 'langlens-backup-2026-04-07_10-20-30Z-encrypted.json', lastModified: 100 },
+        { name: 'langlens-latest-backup.json', lastModified: 200 },
+        { name: 'langlens-latest-backup-encrypted.json', lastModified: 150 }
+    ]);
+
+    assert.equal(choice.name, 'langlens-latest-backup-encrypted.json');
+});
+
+test('backup filename helper falls back to the newest snapshot when no rolling file exists', () => {
+    const choice = BackupUtils.pickPreferredBackupFile([
+        { name: 'langlens-backup-2026-04-07_08-20-30Z-encrypted.json', lastModified: 500 },
+        { name: 'langlens-backup-2026-04-07_10-20-30Z.json', lastModified: 100 },
+        { name: 'langlens-backup-2026-04-07_09-20-30Z-encrypted.json', lastModified: 900 }
+    ]);
+
+    assert.equal(choice.name, 'langlens-backup-2026-04-07_10-20-30Z.json');
+});
+
 test('upgrading a legacy v3 database creates a migration notice setting', async () => {
     await createLegacyV3Database();
 

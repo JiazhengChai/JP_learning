@@ -17,6 +17,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Export and import everything as JSON for easy backups.
 - Create encrypted backups and restore them later with a passphrase.
 - Request persistent browser storage and save backups into a chosen folder, or pick one when the browser supports it.
+- Point that folder at a desktop-synced location such as Google Drive Desktop, OneDrive, or Dropbox for automatic cloud sync.
 - Get a dashboard reminder when your local-first library has no recent backup.
 - Configure how quickly backup reminders appear and trigger a one-click backup from the dashboard.
 - Keep all data local with no backend or account required.
@@ -74,7 +75,7 @@ All app data is stored in the browser using IndexedDB. That means:
 - exporting JSON is the safest way to back up your library,
 - encrypted backups can be restored on another browser or device,
 - encrypted backup files are stored as sealed ciphertext, so the saved file does not expose your library contents without the passphrase,
-- folder backups are useful if you point them at a synced folder such as OneDrive.
+- folder backups are useful if you point them at a synced folder such as Google Drive Desktop, OneDrive, or Dropbox.
 
 ## Backup And Restore
 
@@ -86,6 +87,8 @@ All app data is stored in the browser using IndexedDB. That means:
 - Replace restore is best for full recovery on a new browser.
 - Merge restore is best for combining two libraries without wiping the current one.
 - On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and let LangLens auto-update one rolling encrypted latest-backup file after changes.
+- That folder can be a cloud-synced desktop folder, which gives you automatic off-device backup without adding a backend.
+- If a sync folder is configured, Restore can pull the rolling latest encrypted backup or the newest timestamped snapshot directly from that folder.
 - The backup center lets you choose the reminder threshold in days.
 - After upgrading older local databases, the dashboard shows a short migration notice pointing users to the new backup tools.
 

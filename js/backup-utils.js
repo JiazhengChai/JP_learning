@@ -1,6 +1,7 @@
 (function (globalScope) {
     const DEFAULT_BACKUP_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
     const SEALED_BACKUP_PREFIX = 'LLB2';
+    const BACKUP_FILE_NAME_PATTERN = /^langlens\-(latest\-backup|backup\-([0-9]{4}\-[0-9]{2}\-[0-9]{2}_[0-9]{2}\-[0-9]{2}\-[0-9]{2}Z))(\-encrypted)?\.json$/i;
 
     class BackupUtils {
         static normalizePassphrase(passphrase) {
@@ -18,6 +19,75 @@
                     readingNotes: Array.isArray(data.readingNotes) ? data.readingNotes.length : 0
                 }
             };
+        }
+
+        static parseBackupFileName(fileName) {
+            const normalized = String(fileName || '').trim();
+            const match = normalized.match(BACKUP_FILE_NAME_PATTERN);
+            if (!match) {
+                return null;
+            }
+
+            return {
+                name: normalized,
+                kind: match[1] === 'latest-backup' ? 'latest' : 'snapshot',
+                stamp: match[2] || '',
+                encrypted: !!match[3]
+            };
+        }
+
+        static isBackupFileName(fileName) {
+            return !!BackupUtils.parseBackupFileName(fileName);
+        }
+
+        static pickPreferredBackupFile(candidates = []) {
+            const normalized = candidates
+                .map(candidate => {
+                    const descriptor = typeof candidate === 'string'
+                        ? { name: candidate }
+                        : candidate;
+                    const parsed = BackupUtils.parseBackupFileName(descriptor?.name);
+                    if (!parsed) {
+                        return null;
+                    }
+
+                    return {
+                        ...descriptor,
+                        ...parsed,
+                        lastModified: Number(descriptor?.lastModified) || 0
+                    };
+                })
+                .filter(Boolean);
+
+            normalized.sort((left, right) => {
+                if (left.kind !== right.kind) {
+                    return left.kind === 'latest' ? -1 : 1;
+                }
+
+                if (left.kind === 'latest' && left.encrypted !== right.encrypted) {
+                    return left.encrypted ? -1 : 1;
+                }
+
+                if (left.stamp && right.stamp && left.stamp !== right.stamp) {
+                    return left.stamp < right.stamp ? 1 : -1;
+                }
+
+                if (!!left.stamp !== !!right.stamp) {
+                    return left.stamp ? -1 : 1;
+                }
+
+                if (left.encrypted !== right.encrypted) {
+                    return left.encrypted ? -1 : 1;
+                }
+
+                if (left.lastModified !== right.lastModified) {
+                    return right.lastModified - left.lastModified;
+                }
+
+                return left.name.localeCompare(right.name);
+            });
+
+            return normalized[0] || null;
         }
 
         static getBackupReminder({
@@ -212,6 +282,7 @@
 
     BackupUtils.DEFAULT_BACKUP_THRESHOLD_MS = DEFAULT_BACKUP_THRESHOLD_MS;
     BackupUtils.SEALED_BACKUP_PREFIX = SEALED_BACKUP_PREFIX;
+    BackupUtils.BACKUP_FILE_NAME_PATTERN = BACKUP_FILE_NAME_PATTERN;
 
     globalScope.BackupUtils = BackupUtils;
 

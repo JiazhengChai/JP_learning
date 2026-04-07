@@ -292,6 +292,7 @@ nav { flex: 1; padding: 12px 0; }
     font-size: 0.72rem;
     color: var(--text-muted);
     line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 .btn-subtle {
     flex: 1;
@@ -972,6 +973,7 @@ nav { flex: 1; padding: 12px 0; }
     color: var(--text);
     text-align: right;
     font-weight: 600;
+    overflow-wrap: anywhere;
 }
 .backup-summary-grid {
     display: grid;

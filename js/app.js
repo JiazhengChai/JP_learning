@@ -25,7 +25,12 @@ class App {
             autoSaveOptOut: localStorage.getItem('langlens-backup-auto-save-opt-out') === 'true',
             backupThresholdMs: typeof BackupUtils !== 'undefined' ? BackupUtils.DEFAULT_BACKUP_THRESHOLD_MS : 7 * 24 * 60 * 60 * 1000,
             lastBackupAt: Number(localStorage.getItem('langlens-last-backup-at')) || 0,
-            lastBackupMethod: localStorage.getItem('langlens-last-backup-method') || ''
+            lastBackupMethod: localStorage.getItem('langlens-last-backup-method') || '',
+            lastSyncWriteFileName: localStorage.getItem('langlens-last-sync-write-file-name') || '',
+            lastSyncWriteAt: Number(localStorage.getItem('langlens-last-sync-write-at')) || 0,
+            lastRestoreFileName: localStorage.getItem('langlens-last-restore-file-name') || '',
+            lastRestoreAt: Number(localStorage.getItem('langlens-last-restore-at')) || 0,
+            lastRestoreSource: localStorage.getItem('langlens-last-restore-source') || ''
         };
         this._pendingSelection = null;
         this._selectionHandler = null;
@@ -1277,6 +1282,23 @@ class App {
         }[method] || 'saved';
     }
 
+    async loadBackupIntoRestoreFlow(data, options = {}) {
+        if (BackupUtils.isEncryptedBackup(data)) {
+            await this.showEncryptedRestoreModal(data, options);
+            return;
+        }
+
+        if (!Array.isArray(data?.sources) || !Array.isArray(data?.highlights)) {
+            throw new Error('Invalid backup format');
+        }
+
+        await this.showRestoreConfirmModal(data, {
+            fileName: options.fileName,
+            encrypted: false,
+            restoreSource: options.restoreSource || 'manual-file'
+        });
+    }
+
     hasAutoBackupTarget() {
         return !!this.backupState.folderHandle && this.backupState.folderPermission === 'granted';
     }
@@ -1331,6 +1353,77 @@ class App {
             : JSON.stringify(backup, null, 2);
     }
 
+    restoreSourceLabel(source) {
+        return source === 'sync-folder' ? 'sync folder' : 'selected file';
+    }
+
+    describeFileActivity(fileName, timestamp, emptyLabel) {
+        const normalized = String(fileName || '').trim();
+        if (!normalized) {
+            return emptyLabel;
+        }
+
+        return timestamp
+            ? `${normalized} (${this.relativeTime(timestamp)})`
+            : normalized;
+    }
+
+    describeLastRestoreActivity() {
+        if (!this.backupState.lastRestoreFileName) {
+            return 'No backup restored yet';
+        }
+
+        const detail = this.describeFileActivity(
+            this.backupState.lastRestoreFileName,
+            this.backupState.lastRestoreAt,
+            'No backup restored yet'
+        );
+
+        return `${detail} via ${this.restoreSourceLabel(this.backupState.lastRestoreSource)}`;
+    }
+
+    describeRecentBackupFileLine() {
+        const hasSyncWrite = !!this.backupState.lastSyncWriteFileName;
+        const hasRestore = !!this.backupState.lastRestoreFileName;
+
+        if (!hasSyncWrite && !hasRestore) {
+            return 'Recent backup file: none yet';
+        }
+
+        const syncWriteAt = this.backupState.lastSyncWriteAt || 0;
+        const restoreAt = this.backupState.lastRestoreAt || 0;
+
+        if (hasRestore && (!hasSyncWrite || restoreAt >= syncWriteAt)) {
+            const age = restoreAt ? ` ${this.relativeTime(restoreAt)}` : '';
+            return `Recent backup file: restored ${this.backupState.lastRestoreFileName} from ${this.restoreSourceLabel(this.backupState.lastRestoreSource)}${age}`;
+        }
+
+        const age = syncWriteAt ? ` ${this.relativeTime(syncWriteAt)}` : '';
+        return `Recent backup file: wrote ${this.backupState.lastSyncWriteFileName}${age}`;
+    }
+
+    recordSyncFolderWrite(fileName) {
+        const normalized = String(fileName || '').trim();
+        if (!normalized) return;
+
+        this.backupState.lastSyncWriteFileName = normalized;
+        this.backupState.lastSyncWriteAt = Date.now();
+        localStorage.setItem('langlens-last-sync-write-file-name', normalized);
+        localStorage.setItem('langlens-last-sync-write-at', String(this.backupState.lastSyncWriteAt));
+    }
+
+    recordRestoreFile(fileName, source = 'manual-file') {
+        const normalized = String(fileName || '').trim();
+        if (!normalized) return;
+
+        this.backupState.lastRestoreFileName = normalized;
+        this.backupState.lastRestoreAt = Date.now();
+        this.backupState.lastRestoreSource = source || 'manual-file';
+        localStorage.setItem('langlens-last-restore-file-name', normalized);
+        localStorage.setItem('langlens-last-restore-at', String(this.backupState.lastRestoreAt));
+        localStorage.setItem('langlens-last-restore-source', this.backupState.lastRestoreSource);
+    }
+
     updateBackupFooter() {
         const node = document.getElementById('backup-footer-status');
         if (!node) return;
@@ -1342,13 +1435,14 @@ class App {
             ? `Last backup ${this.relativeTime(this.backupState.lastBackupAt)} via ${this.backupMethodLabel(this.backupState.lastBackupMethod)}`
             : 'No backup saved yet';
         const folderLine = this.backupState.folderHandle
-            ? `Backup folder: ${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
-            : 'Folder backup not configured';
+            ? `Sync folder: ${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
+            : 'Sync folder not configured';
         const autoLine = this.backupState.autoSaveEnabled && this.hasAutoBackupTarget()
-            ? `Auto-backup on: rewrites ${this.getBackupFileName({ encrypted: true, latest: true })}`
+            ? `Auto-backup on: rewrites ${this.getBackupFileName({ encrypted: true, latest: true })} in the sync folder`
             : 'Auto-backup off';
+        const fileLine = this.describeRecentBackupFileLine();
 
-        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(autoLine)}</div>`;
+        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(autoLine)}</div><div>${this.esc(fileLine)}</div>`;
     }
 
     async refreshBackupState() {
@@ -1491,12 +1585,72 @@ class App {
         this.updateBackupFooter();
     }
 
-    recordBackupEvent(method) {
+    recordBackupEvent(method, options = {}) {
         this.backupState.lastBackupAt = Date.now();
         this.backupState.lastBackupMethod = method;
         localStorage.setItem('langlens-last-backup-at', String(this.backupState.lastBackupAt));
         localStorage.setItem('langlens-last-backup-method', method);
+
+        if (String(method).startsWith('folder') && options.fileName) {
+            this.recordSyncFolderWrite(options.fileName);
+        }
+
         this.updateBackupFooter();
+    }
+
+    async getRestoreCandidateFromFolder(handle) {
+        if (!handle || typeof handle.entries !== 'function') {
+            return null;
+        }
+
+        const candidates = [];
+        for await (const [name, entry] of handle.entries()) {
+            if (entry?.kind !== 'file' || !BackupUtils.isBackupFileName(name)) {
+                continue;
+            }
+
+            try {
+                const file = await entry.getFile();
+                candidates.push({
+                    name,
+                    handle: entry,
+                    lastModified: Number(file.lastModified) || 0
+                });
+            } catch {
+                // Ignore files that cannot be read and keep scanning the folder.
+            }
+        }
+
+        return BackupUtils.pickPreferredBackupFile(candidates);
+    }
+
+    async restoreFromBackupFolder() {
+        if (!this.backupState.fsAccessSupported) {
+            throw new Error('Sync-folder restore requires a Chromium-based browser');
+        }
+
+        if (!this.backupState.folderHandle) {
+            throw new Error('Choose a sync folder first');
+        }
+
+        this.backupState.folderPermission = await this.getFolderPermission(this.backupState.folderHandle, true);
+        if (this.backupState.folderPermission !== 'granted') {
+            this.updateBackupFooter();
+            throw new Error('Allow access to the sync folder before restoring');
+        }
+
+        const candidate = await this.getRestoreCandidateFromFolder(this.backupState.folderHandle);
+        if (!candidate?.handle) {
+            throw new Error('No LangLens backup files were found in the selected sync folder');
+        }
+
+        const file = await candidate.handle.getFile();
+        const text = await file.text();
+        const data = JSON.parse(text);
+        await this.loadBackupIntoRestoreFlow(data, {
+            fileName: candidate.name,
+            restoreSource: 'sync-folder'
+        });
     }
 
     getBackupFileName({ encrypted = false, latest = false } = {}) {
@@ -1586,12 +1740,14 @@ class App {
         await writable.write(this.stringifyBackupFile(backup));
         await writable.close();
 
-        this.recordBackupEvent(encrypted ? (options.auto ? 'folder-auto' : 'folder-encrypted') : 'folder');
+        this.recordBackupEvent(encrypted ? (options.auto ? 'folder-auto' : 'folder-encrypted') : 'folder', {
+            fileName
+        });
         if (!options.quiet) {
             this.maybeArmAutoBackup();
         }
         if (!options.quiet) {
-            this.showToast(`Backup saved to folder as ${fileName}`, 'success');
+            this.showToast(`Backup saved to sync folder as ${fileName}`, 'success');
         }
         return true;
     }
@@ -1649,7 +1805,7 @@ class App {
             return false;
         }
 
-        const shouldConfigure = confirm('Restore complete. Choose a backup folder now so future changes can be auto-backed up into one rolling encrypted file?');
+        const shouldConfigure = confirm('Restore complete. Choose a sync folder now so future changes can be auto-backed up into one rolling encrypted file?');
         if (!shouldConfigure) {
             return false;
         }
@@ -1693,7 +1849,7 @@ class App {
             });
 
             if (!saved) {
-                throw new Error('Choose a writable backup folder to resume auto-backup');
+                throw new Error('Choose a writable sync folder to resume auto-backup');
             }
 
             return true;
@@ -1756,7 +1912,7 @@ class App {
         return `Restore complete: ${result.sources.added} texts, ${result.highlights.added} items, ${result.readingNotes.added} notes loaded.`;
     }
 
-    async applyImportedBackup(data, mode) {
+    async applyImportedBackup(data, mode, options = {}) {
         const result = await this.db.importAll(data, { mode });
         this.currentSource = null;
         this.reviewSession = null;
@@ -1773,6 +1929,7 @@ class App {
             this.scheduleAutoBackup('restore');
         }
 
+        this.recordRestoreFile(options.fileName, options.restoreSource);
         this.showToast(this.describeImportResult(result), 'success');
     }
 
@@ -1822,14 +1979,14 @@ class App {
         document.getElementById('restore-confirm').addEventListener('click', async () => {
             try {
                 const mode = document.querySelector('input[name="restore-mode"]:checked')?.value || 'replace';
-                await this.applyImportedBackup(data, mode);
+                await this.applyImportedBackup(data, mode, opts);
             } catch (err) {
                 this.showToast(`Restore failed: ${err.message}`, 'error');
             }
         });
     }
 
-    async showEncryptedRestoreModal(data, fileName) {
+    async showEncryptedRestoreModal(data, options = {}) {
         const hasPreview = BackupUtils.isLegacyEncryptedBackup(data);
         const summary = hasPreview ? this.backupSummary(data) : null;
         this.showModal(`
@@ -1837,7 +1994,7 @@ class App {
             <div class="detail-stack">
                 <div class="backup-panel-title">Encrypted Backup</div>
                 <div class="backup-info-list">
-                    <div class="backup-info-row"><span>File</span><strong>${this.esc(fileName || 'backup.json')}</strong></div>
+                    <div class="backup-info-row"><span>File</span><strong>${this.esc(options.fileName || 'backup.json')}</strong></div>
                     ${hasPreview
                         ? `<div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
                     <div class="backup-info-row"><span>Texts / Items / Notes</span><strong>${summary.counts.sources} / ${summary.counts.highlights} / ${summary.counts.readingNotes}</strong></div>`
@@ -1860,7 +2017,11 @@ class App {
             try {
                 const passphrase = document.getElementById('restore-passphrase').value;
                 const decrypted = await this.decryptBackupData(data, passphrase);
-                await this.showRestoreConfirmModal(decrypted, { fileName, encrypted: true });
+                await this.showRestoreConfirmModal(decrypted, {
+                    fileName: options.fileName,
+                    encrypted: true,
+                    restoreSource: options.restoreSource || 'manual-file'
+                });
             } catch (err) {
                 this.showToast(err.message, 'error');
             }
@@ -1879,6 +2040,12 @@ class App {
         const lastBackupLine = this.backupState.lastBackupAt
             ? `${this.formatDateTime(this.backupState.lastBackupAt)} (${this.relativeTime(this.backupState.lastBackupAt)})`
             : 'No backup saved yet';
+        const lastSyncWriteLine = this.describeFileActivity(
+            this.backupState.lastSyncWriteFileName,
+            this.backupState.lastSyncWriteAt,
+            'No sync-folder backup written yet'
+        );
+        const lastRestoreLine = this.describeLastRestoreActivity();
         const folderLine = this.backupState.folderHandle
             ? `${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
             : 'Not configured';
@@ -1894,13 +2061,16 @@ class App {
                         <div class="backup-info-row"><span>Persistent storage</span><strong>${this.backupState.persistSupported ? (this.backupState.persisted ? 'Enabled' : 'Not granted') : 'Unsupported'}</strong></div>
                         <div class="backup-info-row"><span>Browser estimate</span><strong>${this.esc(quotaLine)}</strong></div>
                         <div class="backup-info-row"><span>Last backup</span><strong>${this.esc(lastBackupLine)}</strong></div>
-                        <div class="backup-info-row"><span>Backup folder</span><strong>${this.esc(folderLine)}</strong></div>
+                        <div class="backup-info-row"><span>Sync folder</span><strong>${this.esc(folderLine)}</strong></div>
+                        <div class="backup-info-row"><span>Last sync write</span><strong>${this.esc(lastSyncWriteLine)}</strong></div>
+                        <div class="backup-info-row"><span>Last restore file</span><strong>${this.esc(lastRestoreLine)}</strong></div>
                     </div>
                     <div class="backup-inline-actions">
                         <button type="button" class="btn btn-secondary" id="backup-request-persist" ${this.backupState.persisted || !this.backupState.persistSupported ? 'disabled' : ''}>🛡 Request Persistent Storage</button>
-                        <button type="button" class="btn btn-secondary" id="backup-clear-folder" ${this.backupState.folderHandle ? '' : 'disabled'}>🗑 Forget Folder</button>
+                        <button type="button" class="btn btn-secondary" id="backup-restore-folder" ${this.backupState.folderHandle ? '' : 'disabled'}>⬆ Restore From Sync Folder</button>
+                        <button type="button" class="btn btn-secondary" id="backup-clear-folder" ${this.backupState.folderHandle ? '' : 'disabled'}>🗑 Forget Sync Folder</button>
                     </div>
-                    <div class="backup-field-hint">Persistent storage lowers the chance that the browser evicts IndexedDB data under storage pressure, but it is not a substitute for backups.</div>
+                    <div class="backup-field-hint">Persistent storage lowers the chance that the browser evicts IndexedDB data under storage pressure, but it is not a substitute for backups. If you choose a folder inside Google Drive Desktop, OneDrive, Dropbox, or another desktop sync tool, LangLens can treat it as a cloud-backed sync folder.</div>
                 </div>
                 <div class="detail-stack">
                     <div class="backup-panel-title">Current Library Snapshot</div>
@@ -1959,13 +2129,13 @@ class App {
                 </div>
                 <div class="backup-inline-actions">
                     <button type="submit" class="btn btn-primary" id="backup-submit">${canPromptForBackupLocation ? '💾 Save Encrypted Backup' : '⬇ Download Encrypted Backup'}</button>
-                    ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-select-folder">📁 Choose Backup Folder</button>' : ''}
+                    ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-select-folder">📁 Choose Sync Folder</button>' : ''}
                 </div>
-                <div class="backup-field-hint">${canPromptForBackupLocation ? 'Save Backup reuses the remembered backup folder or asks you to choose one before saving.' : 'This browser does not expose a reusable save location, so backups use the normal browser download location.'}</div>
+                <div class="backup-field-hint">${canPromptForBackupLocation ? 'Save Backup reuses the remembered sync folder or asks you to choose one before saving.' : 'This browser does not expose a reusable save location, so backups use the normal browser download location.'}</div>
                 ${this.backupState.fsAccessSupported ? `
                     <div class="backup-folder-box">
                         <label class="backup-checkbox"><input type="checkbox" id="backup-auto-save" ${this.backupState.autoSaveEnabled ? 'checked' : ''}> Auto-backup encrypted snapshots to the selected folder after changes</label>
-                        <div class="backup-field-hint">The first successful folder backup arms this automatically unless you turn it off. Auto-backup rewrites ${latestEncryptedFileName} after changes settle, so it keeps one rolling file instead of creating a new JSON every time.</div>
+                        <div class="backup-field-hint">The first successful folder backup arms this automatically unless you turn it off. Auto-backup rewrites ${latestEncryptedFileName} after changes settle, so it keeps one rolling file instead of creating a new JSON every time. Restoring from the sync folder prefers that rolling latest file, then falls back to the newest timestamped snapshot.</div>
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -2004,8 +2174,15 @@ class App {
         document.getElementById('backup-clear-folder')?.addEventListener('click', async () => {
             try {
                 await this.clearBackupFolderHandle();
-                this.showToast('Saved folder was removed', 'success');
+                this.showToast('Saved sync folder was removed', 'success');
                 await this.showBackupCenter();
+            } catch (err) {
+                this.showToast(err.message, 'error');
+            }
+        });
+        document.getElementById('backup-restore-folder')?.addEventListener('click', async () => {
+            try {
+                await this.restoreFromBackupFolder();
             } catch (err) {
                 this.showToast(err.message, 'error');
             }
@@ -2049,7 +2226,7 @@ class App {
             try {
                 const handle = await this.ensureBackupFolder();
                 if (!handle) return;
-                this.showToast(`Backup folder set to ${this.backupState.folderName || 'selected folder'}`, 'success');
+                this.showToast(`Sync folder set to ${this.backupState.folderName || 'selected folder'}`, 'success');
                 await this.showBackupCenter();
             } catch (err) {
                 this.showToast(err.message, 'error');
@@ -4045,14 +4222,10 @@ class App {
         try {
             const text = await file.text();
             const data = JSON.parse(text);
-            if (BackupUtils.isEncryptedBackup(data)) {
-                await this.showEncryptedRestoreModal(data, file.name);
-                return;
-            }
-            if (!Array.isArray(data.sources) || !Array.isArray(data.highlights)) {
-                throw new Error('Invalid backup format');
-            }
-            await this.showRestoreConfirmModal(data, { fileName: file.name, encrypted: false });
+            await this.loadBackupIntoRestoreFlow(data, {
+                fileName: file.name,
+                restoreSource: 'manual-file'
+            });
         } catch (e) {
             this.showToast('Restore failed: ' + e.message, 'error');
         }
