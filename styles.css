@@ -891,6 +891,52 @@ nav { flex: 1; padding: 12px 0; }
     font-size: 0.8rem;
     line-height: 1.5;
 }
+.item-import-preview {
+    display: grid;
+    gap: 12px;
+}
+.item-import-summary {
+    display: grid;
+    gap: 6px;
+    font-size: 0.84rem;
+    color: var(--text-secondary);
+}
+.item-import-summary strong {
+    color: var(--text);
+}
+.item-import-summary-error {
+    color: var(--danger);
+}
+.item-import-preview-list {
+    display: grid;
+    gap: 10px;
+}
+.item-import-preview-row {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.item-import-preview-row strong {
+    color: var(--text);
+    font-family: var(--font-jp);
+    font-size: 0.95rem;
+    overflow-wrap: anywhere;
+}
+.item-import-preview-note {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+.item-import-preview-note-empty {
+    color: var(--text-muted);
+}
+.item-import-preview-caption {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
 .source-modal-image-preview {
     width: 100%;
     max-width: 280px;

@@ -2348,6 +2348,7 @@ class App {
 
             <div class="quick-actions">
                 <button class="btn btn-primary btn-lg" id="dash-add-item">➕ Add Item</button>
+                <button class="btn btn-secondary btn-lg" id="dash-import-item-list">📥 Import List</button>
                 <button class="btn btn-secondary btn-lg" id="dash-review" ${stats.totalHighlights === 0 ? 'disabled' : ''}>🧠 ${stats.dueCount > 0 ? `Review (${stats.dueCount})` : 'Review Items'}</button>
                 <button class="btn btn-secondary btn-lg" id="dash-add-source">📚 Add Text</button>
                 <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
@@ -2389,6 +2390,9 @@ class App {
 
         document.getElementById('dash-add-item')?.addEventListener('click', () => {
             this.showQuickAddItemModal({}, { title: 'Add New Item' });
+        });
+        document.getElementById('dash-import-item-list')?.addEventListener('click', () => {
+            this.showImportItemListModal();
         });
         document.getElementById('dash-migration-open')?.addEventListener('click', () => this.showBackupCenter());
         document.getElementById('dash-migration-dismiss')?.addEventListener('click', () => this.dismissMigrationNotice());
@@ -3061,6 +3065,207 @@ class App {
         return 'vocab';
     }
 
+    async showImportItemListModal(initialData = {}) {
+        const suggestedCat = initialData.category || this.getReviewPrimaryCategory() || 'vocab';
+        const categoryMarkup = await this.buildCategoryMarkup(suggestedCat);
+
+        this.showModal(`
+            <h3>Import Study Item List</h3>
+            <form id="item-list-import-form">
+                <div class="form-group">
+                    <label>Text File</label>
+                    <input type="file" id="item-list-file" accept=".txt,.csv,.tsv,.md,.list,.log,text/plain" required>
+                    <div class="form-hint">Use one item per line. The first : or ： splits the text from the note.</div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Note Separator</label>
+                        <input type="text" id="item-list-delimiter" value=":" maxlength="10" placeholder=":">
+                        <div class="form-hint">Clear this field if every line should import as text only.</div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Category <span class="form-hint">applied to every imported item</span></label>
+                    <div class="category-chip-row">${categoryMarkup}</div>
+                    <div class="inline-input-row">
+                        <input type="text" id="item-import-new-category" placeholder="New category name">
+                    </div>
+                </div>
+                <div id="item-import-preview" class="item-meta-panel item-import-preview"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="item-import-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="item-import-submit" disabled>Import Items</button>
+                </div>
+            </form>
+        `, { size: 'modal-lg' });
+
+        const form = document.getElementById('item-list-import-form');
+        const fileInput = document.getElementById('item-list-file');
+        const delimiterInput = document.getElementById('item-list-delimiter');
+        const preview = document.getElementById('item-import-preview');
+        const submitButton = document.getElementById('item-import-submit');
+        const customCategoryInput = document.getElementById('item-import-new-category');
+        const chips = [...form.querySelectorAll('.category-chip')];
+        let rawText = '';
+        let selectedFileName = '';
+
+        const renderPreview = (parseResult = null, errorMessage = '') => {
+            if (errorMessage) {
+                preview.innerHTML = `
+                    <div class="item-import-summary item-import-summary-error">${this.esc(errorMessage)}</div>
+                `;
+                submitButton.disabled = true;
+                submitButton.textContent = 'Import Items';
+                return;
+            }
+
+            if (!parseResult) {
+                preview.innerHTML = `
+                    <div class="item-import-summary">
+                        <div><strong>Format:</strong> one item per line</div>
+                        <div><strong>With notes:</strong> word:explanation</div>
+                        <div><strong>Without notes:</strong> word</div>
+                    </div>
+                `;
+                submitButton.disabled = true;
+                submitButton.textContent = 'Import Items';
+                return;
+            }
+
+            const invalidLineNumbers = parseResult.skippedLines.slice(0, 5).map(entry => entry.lineNumber).join(', ');
+            const previewItems = parseResult.items.slice(0, 5).map(item => `
+                <div class="item-import-preview-row">
+                    <strong>${this.esc(item.text)}</strong>
+                    <span class="item-import-preview-note ${item.note ? '' : 'item-import-preview-note-empty'}">${this.esc(item.note || 'No note')}</span>
+                </div>
+            `).join('');
+
+            preview.innerHTML = `
+                <div class="item-import-summary">
+                    ${selectedFileName ? `<div><strong>File:</strong> ${this.esc(selectedFileName)}</div>` : ''}
+                    <div><strong>Ready:</strong> ${parseResult.items.length} item${parseResult.items.length === 1 ? '' : 's'}</div>
+                    <div><strong>Blank lines ignored:</strong> ${parseResult.summary.blankLines}</div>
+                    <div><strong>Invalid lines skipped:</strong> ${parseResult.summary.invalidLines}${invalidLineNumbers ? ` (lines ${invalidLineNumbers}${parseResult.summary.invalidLines > 5 ? ', ...' : ''})` : ''}</div>
+                </div>
+                ${previewItems ? `<div class="item-import-preview-list">${previewItems}</div>` : ''}
+                ${parseResult.items.length > 5 ? '<div class="item-import-preview-caption">Showing the first 5 parsed items.</div>' : ''}
+            `;
+
+            submitButton.disabled = parseResult.items.length === 0;
+            submitButton.textContent = parseResult.items.length > 0
+                ? `Import ${parseResult.items.length} Item${parseResult.items.length === 1 ? '' : 's'}`
+                : 'Import Items';
+        };
+
+        const parseCurrentFile = () => {
+            if (!selectedFileName) {
+                return null;
+            }
+
+            return ItemImportUtils.parseItemListText(rawText, {
+                delimiter: delimiterInput.value
+            });
+        };
+
+        chips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                chips.forEach(node => node.classList.remove('active'));
+                chip.classList.add('active');
+                customCategoryInput.value = '';
+            });
+        });
+
+        this.bindEnterToSubmit(form);
+        renderPreview();
+
+        document.getElementById('item-import-cancel').addEventListener('click', () => this.closeModal());
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            selectedFileName = file ? file.name : '';
+            rawText = '';
+
+            if (!file) {
+                renderPreview();
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = 'Reading...';
+            preview.innerHTML = `<div class="item-import-summary">Reading ${this.esc(file.name)}...</div>`;
+
+            try {
+                rawText = await file.text();
+                renderPreview(parseCurrentFile());
+            } catch (err) {
+                renderPreview(null, err.message || 'Unable to read the selected file.');
+            }
+        });
+
+        delimiterInput.addEventListener('input', () => {
+            renderPreview(parseCurrentFile());
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const parseResult = parseCurrentFile();
+            renderPreview(parseResult);
+
+            if (!parseResult || parseResult.items.length === 0) {
+                return;
+            }
+
+            const activeCategory = form.querySelector('.category-chip.active')?.dataset.category || 'vocab';
+            const customCategory = customCategoryInput.value.trim();
+            const category = customCategory || activeCategory || 'vocab';
+            const existingItems = await this.db.getAllHighlights();
+            const importPlan = ItemImportUtils.planItemImport(parseResult.items, {
+                existingItems,
+                category,
+                sourceId: null
+            });
+
+            if (importPlan.itemsToImport.length === 0) {
+                this.showToast('No new items to import from this list.', 'error');
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = 'Importing...';
+
+            try {
+                for (const item of importPlan.itemsToImport) {
+                    await this.db.addHighlight({
+                        sourceId: null,
+                        text: item.text,
+                        note: item.note,
+                        category: item.category,
+                        context: ''
+                    });
+                }
+            } catch (err) {
+                renderPreview(parseResult, err.message || 'Unable to import the selected list.');
+                return;
+            }
+
+            this.closeModal();
+            const importedCount = importPlan.summary.imported;
+            const duplicateCount = importPlan.summary.skippedTotal;
+            this.showToast(
+                duplicateCount > 0
+                    ? `Imported ${importedCount} item${importedCount === 1 ? '' : 's'}; ${duplicateCount} duplicate${duplicateCount === 1 ? '' : 's'} skipped.`
+                    : `Imported ${importedCount} item${importedCount === 1 ? '' : 's'}.`,
+                'success'
+            );
+            this.scheduleAutoBackup('item list import');
+
+            if (this.currentView === 'dashboard') await this.renderDashboard();
+            if (this.currentView === 'vocab') await this.renderVocab();
+            await this.updateReviewBadge();
+        });
+    }
+
     async showQuickAddItemModal(data = {}, opts = {}) {
         const suggestedCat = data.category || this.getReviewPrimaryCategory() || this.suggestCategory(data.text || '');
         const categoryMarkup = await this.buildCategoryMarkup(suggestedCat);
@@ -3544,6 +3749,7 @@ class App {
                 <h2>🔤 Study Items</h2>
                 <div class="view-header-actions">
                     <span style="color:var(--text-secondary);font-size:0.85rem;">${items.length} items</span>
+                    <button class="btn btn-secondary" id="vocab-import-list">📥 Import List</button>
                     <button class="btn btn-primary" id="vocab-add-item">➕ Add Item</button>
                 </div>
             </div>
@@ -3619,6 +3825,10 @@ class App {
         document.getElementById('vocab-add-item')?.addEventListener('click', () => {
             const selectedCategory = document.getElementById('vocab-filter-category')?.value || '';
             this.showQuickAddItemModal({ category: selectedCategory }, { title: 'Add New Item' });
+        });
+        document.getElementById('vocab-import-list')?.addEventListener('click', () => {
+            const selectedCategory = document.getElementById('vocab-filter-category')?.value || '';
+            this.showImportItemListModal({ category: selectedCategory });
         });
 
         this.bindVocabTableEvents();

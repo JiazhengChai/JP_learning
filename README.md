@@ -11,6 +11,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Read from a personal library of imported texts.
 - Drop files or plain text onto the dashboard or library to create texts quickly.
 - Save study items with just an input text and note.
+- Import a line-based item list from a text file using formats like `word:note` or `word`.
 - Capture reading notes in context and browse them later by source or color.
 - Group items into categories and keep metadata like added time and character count.
 - Review due items with a front/back flashcard workflow and filter by multiple categories, source texts, and mastery levels.
@@ -26,7 +27,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 
 - Dashboard: at-a-glance stats, recent activity, due review count, and quick drag-and-drop text import.
 - Library: organize sources and open them in the reader.
-- Items: browse saved items by category, source, mastery, and review state.
+- Items: browse saved items by category, source, mastery, and review state, or bulk import them from a line-based text file.
 - Notes: browse saved reading notes by source, color, and creation date.
 - Review: study prompt-only cards, flip for the note, filter the queue, then rate recall.
 
@@ -97,6 +98,7 @@ All app data is stored in the browser using IndexedDB. That means:
 - `index.html` - app shell and navigation
 - `styles.css` - visual design and layout
 - `js/db.js` - IndexedDB data layer
+- `js/item-import-utils.js` - line-based item list parsing and deduping helpers
 - `js/app.js` - UI, navigation, and review logic
 
 ## Notes
