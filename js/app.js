@@ -10,6 +10,8 @@ class App {
         this.currentSource = null;
         this.reviewSession = null;
         this.reviewFilters = this.getDefaultReviewFilters();
+        this.vocabFilters = this.getDefaultVocabFilters();
+        this.vocabColumnWidths = this.loadVocabColumnWidths();
         this.backupState = {
             storageSupported: typeof navigator !== 'undefined' && !!navigator.storage,
             persistSupported: typeof navigator !== 'undefined' && !!navigator.storage?.persist,
@@ -280,6 +282,54 @@ class App {
             sources: [],
             masteryLevels: []
         };
+    }
+
+    getDefaultVocabFilters() {
+        return {
+            search: '',
+            category: '',
+            source: '',
+            mastery: '',
+            sort: 'newest'
+        };
+    }
+
+    getDefaultVocabColumnWidths() {
+        return {
+            text: 320,
+            note: 420
+        };
+    }
+
+    normalizeVocabColumnWidth(width, fallback) {
+        const value = Number.parseInt(width, 10);
+        if (!Number.isFinite(value)) return fallback;
+        return Math.max(220, Math.min(720, value));
+    }
+
+    loadVocabColumnWidths() {
+        const defaults = this.getDefaultVocabColumnWidths();
+        if (typeof localStorage === 'undefined') {
+            return defaults;
+        }
+
+        try {
+            const saved = JSON.parse(localStorage.getItem('langlens-vocab-column-widths') || '{}');
+            return {
+                text: this.normalizeVocabColumnWidth(saved.text, defaults.text),
+                note: this.normalizeVocabColumnWidth(saved.note, defaults.note)
+            };
+        } catch (error) {
+            return defaults;
+        }
+    }
+
+    saveVocabColumnWidths() {
+        if (typeof localStorage === 'undefined') {
+            return;
+        }
+
+        localStorage.setItem('langlens-vocab-column-widths', JSON.stringify(this.vocabColumnWidths));
     }
 
     cloneReviewFilters(filters = this.reviewFilters) {
@@ -3792,6 +3842,12 @@ class App {
         const sourceMap = {};
         for (const source of sources) sourceMap[source.id] = source;
         const categories = this.getUniqueCategories(items);
+        const sourceOptions = this.getVocabSourceOptions(items, sourceMap);
+        this.vocabFilters = this.normalizeVocabFilters(categories, sourceOptions, this.vocabFilters);
+        const filteredItems = this.sortVocabItems(
+            this.filterVocabItems(items, sourceMap, this.vocabFilters),
+            this.vocabFilters.sort
+        );
         const view = document.getElementById('view-vocab');
 
         view.innerHTML = `
@@ -3812,8 +3868,7 @@ class App {
                 </select>
                 <select id="vocab-filter-source">
                     <option value="">All Sources</option>
-                    <option value="manual">Manual</option>
-                    ${sources.map(source => `<option value="${source.id}">${this.esc(source.title)}</option>`).join('')}
+                    ${sourceOptions.map(option => `<option value="${this.esc(String(option.value))}">${this.esc(option.label)}</option>`).join('')}
                 </select>
                 <select id="vocab-filter-mastery">
                     <option value="">All Levels</option>
@@ -3828,48 +3883,27 @@ class App {
                     <option value="newest">Newest First</option>
                     <option value="oldest">Oldest First</option>
                     <option value="alpha">A → Z</option>
-                    <option value="chars-desc">Longest First</option>
+                    <option value="chars-desc">Longest Text First</option>
                     <option value="mastery-desc">Mastery ↓</option>
                 </select>
             </div>
 
-            <div id="vocab-table-container">${this.renderVocabTable(items, sourceMap)}</div>
+            <div id="vocab-table-container" class="vocab-table-container">${this.renderVocabTable(filteredItems, sourceMap)}</div>
         `;
 
-        const applyFilters = () => {
-            const search = document.getElementById('vocab-search').value.toLowerCase();
-            const category = document.getElementById('vocab-filter-category').value;
-            const sourceId = document.getElementById('vocab-filter-source').value;
-            const mastery = document.getElementById('vocab-filter-mastery').value;
-            const sort = document.getElementById('vocab-sort').value;
+        document.getElementById('vocab-search').value = this.vocabFilters.search;
+        document.getElementById('vocab-filter-category').value = this.vocabFilters.category;
+        document.getElementById('vocab-filter-source').value = this.vocabFilters.source;
+        document.getElementById('vocab-filter-mastery').value = this.vocabFilters.mastery;
+        document.getElementById('vocab-sort').value = this.vocabFilters.sort;
 
-            let filtered = [...items];
-            if (search) {
-                filtered = filtered.filter(item =>
-                    item.text.toLowerCase().includes(search)
-                    || (item.note || '').toLowerCase().includes(search)
-                    || (item.category || '').toLowerCase().includes(search)
-                    || this.getSourceLabel(item, sourceMap).toLowerCase().includes(search)
-                );
-            }
-            if (category) filtered = filtered.filter(item => (item.category || 'General') === category);
-            if (sourceId === 'manual') filtered = filtered.filter(item => !item.sourceId);
-            if (sourceId && sourceId !== 'manual') filtered = filtered.filter(item => item.sourceId === parseInt(sourceId, 10));
-            if (mastery !== '') filtered = filtered.filter(item => (item.masteryLevel || 0) === parseInt(mastery, 10));
-
-            if (sort === 'newest') filtered.sort((a, b) => b.createdAt - a.createdAt);
-            if (sort === 'oldest') filtered.sort((a, b) => a.createdAt - b.createdAt);
-            if (sort === 'alpha') filtered.sort((a, b) => a.text.localeCompare(b.text));
-            if (sort === 'chars-desc') filtered.sort((a, b) => (b.charCount || b.text.length) - (a.charCount || a.text.length));
-            if (sort === 'mastery-desc') filtered.sort((a, b) => (b.masteryLevel || 0) - (a.masteryLevel || 0));
-
-            document.getElementById('vocab-table-container').innerHTML = this.renderVocabTable(filtered, sourceMap);
-            this.bindVocabTableEvents();
-        };
+        this.applyVocabColumnWidths(document.getElementById('vocab-table-container'));
 
         ['vocab-search', 'vocab-filter-category', 'vocab-filter-source', 'vocab-filter-mastery', 'vocab-sort'].forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener(id === 'vocab-search' ? 'input' : 'change', applyFilters);
+            el.addEventListener(id === 'vocab-search' ? 'input' : 'change', () => {
+                this.applyVocabFilters(items, sourceMap, categories, sourceOptions);
+            });
         });
 
         document.getElementById('vocab-add-item')?.addEventListener('click', () => {
@@ -3881,7 +3915,120 @@ class App {
             this.showImportItemListModal({ category: selectedCategory });
         });
 
-        this.bindVocabTableEvents();
+        this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
+        this.bindVocabColumnResizers();
+    }
+
+    getVocabSourceOptions(items, sourceMap = {}) {
+        return this.getReviewSourceOptions(items, sourceMap).map(option => ({
+            ...option,
+            label: option.value === 'manual' ? 'Manual' : option.label
+        }));
+    }
+
+    normalizeVocabFilters(categories, sourceOptions, filters = this.vocabFilters) {
+        const nextFilters = {
+            ...this.getDefaultVocabFilters(),
+            ...(filters || {})
+        };
+        const validSorts = new Set(['newest', 'oldest', 'alpha', 'chars-desc', 'mastery-desc']);
+        const validMastery = new Set(['', '0', '1', '2', '3', '4', '5']);
+
+        nextFilters.search = typeof nextFilters.search === 'string' ? nextFilters.search : '';
+        nextFilters.category = categories.includes(nextFilters.category) ? nextFilters.category : '';
+        nextFilters.source = sourceOptions.some(option => String(option.value) === String(nextFilters.source))
+            ? String(nextFilters.source)
+            : '';
+        nextFilters.mastery = validMastery.has(String(nextFilters.mastery))
+            ? String(nextFilters.mastery)
+            : '';
+        nextFilters.sort = validSorts.has(String(nextFilters.sort))
+            ? String(nextFilters.sort)
+            : 'newest';
+
+        return nextFilters;
+    }
+
+    getVocabFiltersFromDom() {
+        return {
+            search: document.getElementById('vocab-search')?.value || '',
+            category: document.getElementById('vocab-filter-category')?.value || '',
+            source: document.getElementById('vocab-filter-source')?.value || '',
+            mastery: document.getElementById('vocab-filter-mastery')?.value || '',
+            sort: document.getElementById('vocab-sort')?.value || 'newest'
+        };
+    }
+
+    filterVocabItems(items, sourceMap, filters = this.vocabFilters) {
+        const search = (filters.search || '').trim().toLowerCase();
+        const category = filters.category || '';
+        const source = filters.source || '';
+        const mastery = filters.mastery;
+
+        let filtered = [...items];
+
+        if (search) {
+            filtered = filtered.filter(item =>
+                item.text.toLowerCase().includes(search)
+                || (item.note || '').toLowerCase().includes(search)
+                || (item.category || '').toLowerCase().includes(search)
+                || this.getSourceLabel(item, sourceMap).toLowerCase().includes(search)
+            );
+        }
+
+        if (category) {
+            filtered = filtered.filter(item => (item.category || 'General') === category);
+        }
+
+        if (source === 'manual') {
+            filtered = filtered.filter(item => !item.sourceId);
+        } else if (source) {
+            const sourceId = Number.parseInt(source, 10);
+            filtered = filtered.filter(item => item.sourceId === sourceId);
+        }
+
+        if (mastery !== '') {
+            const level = Number.parseInt(mastery, 10);
+            filtered = filtered.filter(item => (item.masteryLevel || 0) === level);
+        }
+
+        return filtered;
+    }
+
+    sortVocabItems(items, sort = this.vocabFilters.sort) {
+        if (sort === 'newest') items.sort((a, b) => b.createdAt - a.createdAt);
+        if (sort === 'oldest') items.sort((a, b) => a.createdAt - b.createdAt);
+        if (sort === 'alpha') items.sort((a, b) => a.text.localeCompare(b.text));
+        if (sort === 'chars-desc') items.sort((a, b) => (b.charCount || b.text.length) - (a.charCount || a.text.length));
+        if (sort === 'mastery-desc') items.sort((a, b) => (b.masteryLevel || 0) - (a.masteryLevel || 0));
+        return items;
+    }
+
+    applyVocabFilters(items, sourceMap, categories, sourceOptions) {
+        this.vocabFilters = this.normalizeVocabFilters(
+            categories,
+            sourceOptions,
+            this.getVocabFiltersFromDom()
+        );
+
+        const filteredItems = this.sortVocabItems(
+            this.filterVocabItems(items, sourceMap, this.vocabFilters),
+            this.vocabFilters.sort
+        );
+        const tableContainer = document.getElementById('vocab-table-container');
+        if (!tableContainer) return;
+
+        tableContainer.innerHTML = this.renderVocabTable(filteredItems, sourceMap);
+        this.applyVocabColumnWidths(tableContainer);
+        this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
+        this.bindVocabColumnResizers();
+    }
+
+    applyVocabColumnWidths(container = document.getElementById('vocab-table-container')) {
+        if (!container) return;
+
+        container.style.setProperty('--vocab-text-col-width', `${this.vocabColumnWidths.text}px`);
+        container.style.setProperty('--vocab-note-col-width', `${this.vocabColumnWidths.note}px`);
     }
 
     async renderNotes() {
@@ -3964,52 +4111,68 @@ class App {
             return '<div class="empty-state"><div class="empty-icon">🔤</div><p>No study items match your filters.</p></div>';
         }
 
+        const activeSource = this.vocabFilters.source || '';
+
         return `
-            <table class="vocab-table">
-                <thead>
-                    <tr>
-                        <th>Text</th>
-                        <th>Note</th>
-                        <th>Category</th>
-                        <th>Source</th>
-                        <th>Chars</th>
-                        <th>Mastery</th>
-                        <th>Added</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${items.map(item => {
-                        const level = item.masteryLevel || 0;
-                        const textPreview = item.text || '—';
-                        const notePreview = item.note || '—';
-                        return `
-                            <tr class="vocab-row" data-hl-id="${item.id}">
-                                <td>
-                                    <div class="vocab-text table-preview-line" title="${this.esc(textPreview)}">${this.esc(textPreview)}</div>
-                                </td>
-                                <td><div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
-                                <td><span class="tag">${this.esc(item.category || 'General')}</span></td>
-                                <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(item, sourceMap))}</td>
-                                <td>${item.charCount || item.text.length}</td>
-                                <td>
-                                    <div class="mastery">
-                                        ${[0, 1, 2, 3, 4].map(i => `<span class="mastery-dot ${i < level ? 'filled' : ''}"></span>`).join('')}
-                                        <span class="mastery-label">${this.masteryName(level)}</span>
-                                    </div>
-                                </td>
-                                <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(item.createdAt)}</td>
-                                <td class="actions-cell">
-                                    <div class="table-actions">
-                                        <button type="button" class="icon-action-btn" data-item-action="edit" data-hl-id="${item.id}" title="Edit item">✏️</button>
-                                        <button type="button" class="icon-action-btn icon-action-danger" data-item-action="delete" data-hl-id="${item.id}" title="Delete item">✕</button>
-                                    </div>
-                                </td>
-                            </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
+            <div class="vocab-table-shell">
+                <table class="vocab-table vocab-table-items">
+                    <colgroup>
+                        <col class="vocab-col-text">
+                        <col class="vocab-col-note">
+                        <col class="vocab-col-category">
+                        <col class="vocab-col-source">
+                        <col class="vocab-col-mastery">
+                        <col class="vocab-col-added">
+                        <col class="vocab-col-actions">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th class="vocab-table-heading-resizable">Text<span class="column-resizer" data-vocab-resize="text" title="Drag to resize the text column"></span></th>
+                            <th class="vocab-table-heading-resizable">Note<span class="column-resizer" data-vocab-resize="note" title="Drag to resize the note column"></span></th>
+                            <th>Category</th>
+                            <th>Source</th>
+                            <th>Mastery</th>
+                            <th>Added</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${items.map(item => {
+                            const level = item.masteryLevel || 0;
+                            const textPreview = item.text || '—';
+                            const notePreview = item.note || '—';
+                            const sourceValue = item.sourceId ? String(item.sourceId) : 'manual';
+                            const sourceLabel = this.getSourceLabel(item, sourceMap);
+                            const sourceActive = activeSource === sourceValue;
+                            return `
+                                <tr class="vocab-row" data-hl-id="${item.id}">
+                                    <td>
+                                        <div class="vocab-text table-preview-line" title="${this.esc(textPreview)}">${this.esc(textPreview)}</div>
+                                    </td>
+                                    <td><div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
+                                    <td><span class="tag">${this.esc(item.category || 'General')}</span></td>
+                                    <td class="vocab-source-cell">
+                                        <button type="button" class="table-filter-chip ${sourceActive ? 'active' : ''}" data-vocab-source-filter="${this.esc(sourceValue)}" title="Filter by ${this.esc(sourceLabel)}">${this.esc(sourceLabel)}</button>
+                                    </td>
+                                    <td>
+                                        <div class="mastery">
+                                            ${[0, 1, 2, 3, 4].map(i => `<span class="mastery-dot ${i < level ? 'filled' : ''}"></span>`).join('')}
+                                            <span class="mastery-label">${this.masteryName(level)}</span>
+                                        </div>
+                                    </td>
+                                    <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(item.createdAt)}</td>
+                                    <td class="actions-cell">
+                                        <div class="table-actions">
+                                            <button type="button" class="icon-action-btn" data-item-action="edit" data-hl-id="${item.id}" title="Edit item">✏️</button>
+                                            <button type="button" class="icon-action-btn icon-action-danger" data-item-action="delete" data-hl-id="${item.id}" title="Delete item">✕</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
         `;
     }
 
@@ -4061,11 +4224,23 @@ class App {
         `;
     }
 
-    bindVocabTableEvents() {
+    bindVocabTableEvents(items, sourceMap, categories, sourceOptions) {
         document.querySelectorAll('.vocab-row').forEach(row => {
             row.addEventListener('click', (e) => {
                 if (e.target.closest('.icon-action-btn')) return;
                 this.showHighlightDetailModal(parseInt(row.dataset.hlId, 10));
+            });
+        });
+
+        document.querySelectorAll('.table-filter-chip[data-vocab-source-filter]').forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const sourceSelect = document.getElementById('vocab-filter-source');
+                if (!sourceSelect) return;
+
+                const nextValue = button.dataset.vocabSourceFilter || '';
+                sourceSelect.value = sourceSelect.value === nextValue ? '' : nextValue;
+                this.applyVocabFilters(items, sourceMap, categories, sourceOptions);
             });
         });
 
@@ -4082,6 +4257,44 @@ class App {
                 }
 
                 await this.deleteHighlightWithConfirm(hlId);
+            });
+        });
+    }
+
+    bindVocabColumnResizers() {
+        const container = document.getElementById('vocab-table-container');
+        if (!container) return;
+
+        container.querySelectorAll('.column-resizer[data-vocab-resize]').forEach(handle => {
+            handle.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const columnKey = handle.dataset.vocabResize;
+                const startX = event.clientX;
+                const startWidth = this.vocabColumnWidths[columnKey];
+
+                if (!columnKey || !Number.isFinite(startWidth)) return;
+
+                document.body.classList.add('column-resizing');
+
+                const onPointerMove = moveEvent => {
+                    this.vocabColumnWidths[columnKey] = this.normalizeVocabColumnWidth(
+                        startWidth + (moveEvent.clientX - startX),
+                        startWidth
+                    );
+                    this.applyVocabColumnWidths(container);
+                };
+
+                const onPointerUp = () => {
+                    document.body.classList.remove('column-resizing');
+                    document.removeEventListener('pointermove', onPointerMove);
+                    document.removeEventListener('pointerup', onPointerUp);
+                    this.saveVocabColumnWidths();
+                };
+
+                document.addEventListener('pointermove', onPointerMove);
+                document.addEventListener('pointerup', onPointerUp);
             });
         });
     }

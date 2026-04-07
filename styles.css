@@ -70,6 +70,11 @@ body {
     overflow: hidden;
     line-height: 1.5;
 }
+body.column-resizing,
+body.column-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
 a { color: var(--accent); text-decoration: none; }
 button { cursor: pointer; font-family: inherit; }
 input, textarea, select { font-family: inherit; }
@@ -1205,10 +1210,41 @@ nav { flex: 1; padding: 12px 0; }
 }
 .vocab-filters input { min-width: 220px; }
 .vocab-filters select { min-width: 120px; }
+.vocab-table-container {
+    min-width: 0;
+}
+.vocab-table-shell {
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
 .vocab-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
+}
+.vocab-table.vocab-table-items {
+    min-width: calc(var(--vocab-text-col-width, 320px) + var(--vocab-note-col-width, 420px) + 36rem);
+}
+.vocab-table.vocab-table-items .vocab-col-text {
+    width: var(--vocab-text-col-width, 320px);
+}
+.vocab-table.vocab-table-items .vocab-col-note {
+    width: var(--vocab-note-col-width, 420px);
+}
+.vocab-table.vocab-table-items .vocab-col-category {
+    width: 120px;
+}
+.vocab-table.vocab-table-items .vocab-col-source {
+    width: 180px;
+}
+.vocab-table.vocab-table-items .vocab-col-mastery {
+    width: 140px;
+}
+.vocab-table.vocab-table-items .vocab-col-added {
+    width: 110px;
+}
+.vocab-table.vocab-table-items .vocab-col-actions {
+    width: 92px;
 }
 .vocab-table th {
     text-align: left;
@@ -1219,6 +1255,34 @@ nav { flex: 1; padding: 12px 0; }
     text-transform: uppercase;
     letter-spacing: 0.5px;
     border-bottom: 1px solid var(--border);
+}
+.vocab-table-heading-resizable {
+    position: relative;
+    padding-right: 22px;
+}
+.column-resizer {
+    position: absolute;
+    top: 0;
+    right: -6px;
+    bottom: 0;
+    width: 12px;
+    touch-action: none;
+    cursor: col-resize;
+}
+.column-resizer::after {
+    content: '';
+    position: absolute;
+    top: 20%;
+    bottom: 20%;
+    left: 50%;
+    width: 2px;
+    border-radius: 999px;
+    transform: translateX(-50%);
+    background: rgba(88, 166, 255, 0.18);
+    transition: background 0.15s ease;
+}
+.column-resizer:hover::after {
+    background: rgba(88, 166, 255, 0.45);
 }
 .vocab-table td {
     padding: 12px;
@@ -1252,6 +1316,35 @@ nav { flex: 1; padding: 12px 0; }
 .vocab-table .vocab-reading {
     color: var(--purple);
     font-size: 0.8rem;
+}
+.vocab-source-cell {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+.table-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    min-width: 0;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.15s ease;
+}
+.table-filter-chip:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+}
+.table-filter-chip.active {
+    background: rgba(88, 166, 255, 0.12);
+    border-color: rgba(88, 166, 255, 0.4);
+    color: var(--accent);
 }
 
 /* Mastery indicator */
