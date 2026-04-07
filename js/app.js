@@ -3375,6 +3375,10 @@ class App {
             const note = document.getElementById('item-note').value.trim();
             if (!text) return;
 
+            const preservedReaderScrollTop = this.currentView === 'reader'
+                ? document.getElementById('main')?.scrollTop ?? 0
+                : null;
+
             const activeCategory = document.querySelector('.category-chip.active')?.dataset.category || 'vocab';
             const customCategory = document.getElementById('item-new-category').value.trim();
             const category = customCategory || activeCategory || 'vocab';
@@ -3393,7 +3397,13 @@ class App {
             this.showToast('Item saved!', 'success');
             window.getSelection().removeAllRanges();
             this.scheduleAutoBackup('item add');
-            if (this.currentView === 'reader' && this.currentSource) await this.renderReader();
+            if (this.currentView === 'reader' && this.currentSource) {
+                await this.renderReader();
+                const main = document.getElementById('main');
+                if (main && Number.isFinite(preservedReaderScrollTop)) {
+                    main.scrollTop = preservedReaderScrollTop;
+                }
+            }
             if (this.currentView === 'vocab') await this.renderVocab();
             if (this.currentView === 'dashboard') await this.renderDashboard();
             this.updateReviewBadge();
