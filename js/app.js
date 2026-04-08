@@ -12,6 +12,11 @@ class App {
         this.reviewFilters = this.getDefaultReviewFilters();
         this.vocabFilters = this.getDefaultVocabFilters();
         this.vocabColumnWidths = this.loadVocabColumnWidths();
+        this.listPagination = {
+            library: this.getDefaultPaginationState('library'),
+            vocab: this.getDefaultPaginationState('vocab'),
+            notes: this.getDefaultPaginationState('notes')
+        };
         this.backupState = {
             storageSupported: typeof navigator !== 'undefined' && !!navigator.storage,
             persistSupported: typeof navigator !== 'undefined' && !!navigator.storage?.persist,
@@ -300,6 +305,148 @@ class App {
             text: 320,
             note: 420
         };
+    }
+
+    getPaginationPageSize(view) {
+        return 25;
+    }
+
+    getDefaultPaginationState(view) {
+        return {
+            page: 1,
+            pageSize: this.getPaginationPageSize(view)
+        };
+    }
+
+    ensurePaginationState(view) {
+        if (!this.listPagination) {
+            this.listPagination = {};
+        }
+
+        const fallback = this.getDefaultPaginationState(view);
+        const current = this.listPagination[view] || fallback;
+        const nextPage = Number.parseInt(current.page, 10);
+        const nextPageSize = Number.parseInt(current.pageSize, 10);
+
+        this.listPagination[view] = {
+            page: Number.isFinite(nextPage) && nextPage > 0 ? nextPage : fallback.page,
+            pageSize: Number.isFinite(nextPageSize) && nextPageSize > 0 ? nextPageSize : fallback.pageSize
+        };
+
+        return this.listPagination[view];
+    }
+
+    resetPagination(view) {
+        this.listPagination[view] = this.getDefaultPaginationState(view);
+        return this.listPagination[view];
+    }
+
+    setPaginationPage(view, page) {
+        const current = this.ensurePaginationState(view);
+        const nextPage = Number.parseInt(page, 10);
+
+        this.listPagination[view] = {
+            ...current,
+            page: Number.isFinite(nextPage) && nextPage > 0 ? nextPage : 1
+        };
+
+        return this.listPagination[view];
+    }
+
+    paginateEntries(view, entries) {
+        const state = this.ensurePaginationState(view);
+        const totalItems = Array.isArray(entries) ? entries.length : 0;
+        const totalPages = Math.max(1, Math.ceil(totalItems / state.pageSize));
+        const page = Math.min(state.page, totalPages);
+        const startIndex = totalItems === 0 ? 0 : (page - 1) * state.pageSize;
+        const endIndex = Math.min(startIndex + state.pageSize, totalItems);
+
+        this.listPagination[view] = {
+            ...state,
+            page
+        };
+
+        return {
+            page,
+            pageSize: state.pageSize,
+            totalItems,
+            totalPages,
+            startIndex,
+            endIndex,
+            items: entries.slice(startIndex, endIndex)
+        };
+    }
+
+    formatPaginationSummary(pagination, singular, plural = `${singular}s`) {
+        const noun = pagination.totalItems === 1 ? singular : plural;
+
+        if (pagination.totalItems === 0) {
+            return `0 ${noun}`;
+        }
+
+        if (pagination.totalItems <= pagination.pageSize) {
+            return `${pagination.totalItems} ${noun}`;
+        }
+
+        return `Showing ${pagination.startIndex + 1}-${pagination.endIndex} of ${pagination.totalItems} ${noun}`;
+    }
+
+    getPaginationPageNumbers(page, totalPages, maxButtons = 5) {
+        if (totalPages <= maxButtons) {
+            return Array.from({ length: totalPages }, (_, index) => index + 1);
+        }
+
+        const half = Math.floor(maxButtons / 2);
+        let start = Math.max(1, page - half);
+        let end = start + maxButtons - 1;
+
+        if (end > totalPages) {
+            end = totalPages;
+            start = Math.max(1, end - maxButtons + 1);
+        }
+
+        return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+    }
+
+    renderPaginationControls(view, pagination, singular, plural = `${singular}s`) {
+        if (pagination.totalItems <= pagination.pageSize) {
+            return '';
+        }
+
+        const noun = pagination.totalItems === 1 ? singular : plural;
+        const pageNumbers = this.getPaginationPageNumbers(pagination.page, pagination.totalPages);
+
+        return `
+            <div class="list-pagination" data-pagination-view="${this.esc(view)}">
+                <div class="list-pagination-summary">${this.esc(`Showing ${pagination.startIndex + 1}-${pagination.endIndex} of ${pagination.totalItems} ${noun}`)}</div>
+                <div class="list-pagination-actions">
+                    <button type="button" class="list-pagination-btn" data-pagination-target="${pagination.page - 1}" ${pagination.page === 1 ? 'disabled' : ''}>Previous</button>
+                    ${pageNumbers.map(pageNumber => `
+                        <button type="button" class="list-pagination-btn ${pageNumber === pagination.page ? 'active' : ''}" data-pagination-target="${pageNumber}" ${pageNumber === pagination.page ? 'aria-current="page"' : ''}>${pageNumber}</button>
+                    `).join('')}
+                    <button type="button" class="list-pagination-btn" data-pagination-target="${pagination.page + 1}" ${pagination.page === pagination.totalPages ? 'disabled' : ''}>Next</button>
+                </div>
+            </div>
+        `;
+    }
+
+    bindPaginationControls(container, view, onPageChange) {
+        if (!container) return;
+
+        container.querySelectorAll('[data-pagination-target]').forEach(button => {
+            button.addEventListener('click', () => {
+                if (button.disabled) return;
+
+                const nextPage = Number.parseInt(button.dataset.paginationTarget, 10);
+                if (!Number.isFinite(nextPage) || nextPage < 1) return;
+
+                const current = this.ensurePaginationState(view);
+                if (nextPage === current.page) return;
+
+                this.setPaginationPage(view, nextPage);
+                onPageChange();
+            });
+        });
     }
 
     normalizeVocabColumnWidth(width, fallback) {
@@ -2729,6 +2876,7 @@ class App {
             this.db.getAllSources(),
             this.db.getAllHighlights()
         ]);
+        this.resetPagination('library');
         const counts = {};
         for (const item of highlights) {
             if (item.sourceId) counts[item.sourceId] = (counts[item.sourceId] || 0) + 1;
@@ -2760,12 +2908,18 @@ class App {
         const renderCards = (visibleSources) => {
             const container = document.getElementById('library-cards-container');
             const countLabel = document.getElementById('lib-count');
+            const pagination = this.paginateEntries('library', visibleSources);
+            const pageSources = pagination.items;
             const totalLabel = `${totalSources} text${totalSources === 1 ? '' : 's'}`;
 
             if (countLabel) {
-                countLabel.textContent = visibleSources.length === totalSources
-                    ? totalLabel
-                    : `${visibleSources.length} of ${totalLabel}`;
+                if (visibleSources.length === totalSources) {
+                    countLabel.textContent = this.formatPaginationSummary(pagination, 'text');
+                } else if (visibleSources.length === 0) {
+                    countLabel.textContent = `0 of ${totalLabel}`;
+                } else {
+                    countLabel.textContent = `${this.formatPaginationSummary(pagination, 'matching text')} filtered from ${totalLabel}`;
+                }
             }
 
             if (visibleSources.length === 0) {
@@ -2790,69 +2944,107 @@ class App {
                     document.getElementById('library-filter-language').value = '';
                     document.getElementById('library-filter-tag').value = '';
                     document.getElementById('library-sort').value = 'newest';
-                    applyFilters();
+                    applyFilters({ resetPage: true });
                 });
                 return;
             }
 
             container.innerHTML = `
-                <div class="cards-grid">
-                    ${visibleSources.map(source => {
-                        const previewText = (source.content || '').substring(0, 200);
+                <div class="vocab-table-shell">
+                    <table class="vocab-table library-table">
+                        <colgroup>
+                            <col class="library-col-title">
+                            <col class="library-col-preview">
+                            <col class="library-col-type">
+                            <col class="library-col-items">
+                            <col class="library-col-added">
+                            <col class="library-col-language">
+                            <col class="library-col-tags">
+                            <col class="library-col-actions">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>Preview</th>
+                                <th>Type</th>
+                                <th>Items</th>
+                                <th>Added</th>
+                                <th>Language</th>
+                                <th>Tags</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                    ${pageSources.map(source => {
+                        const titleText = String(source.title || '').trim() || 'Untitled text';
+                        const previewText = String(source.content || '').replace(/\s+/g, ' ').trim().substring(0, 200) || '—';
+                        const sourceType = source.sourceType || 'article';
+                        const sourceIcon = sourceType === 'audio'
+                            ? '🎧'
+                            : sourceType === 'video'
+                                ? '🎬'
+                                : sourceType === 'other'
+                                    ? '📋'
+                                    : '📄';
+                        const languageText = String(source.language || '').trim() || '—';
+                        const tagsText = Array.isArray(source.tags) && source.tags.length > 0
+                            ? source.tags.join(', ')
+                            : '—';
                         return `
-                        <div class="source-card" data-id="${source.id}">
-                            ${source.imageUrl ? `
-                                <div class="source-card-image" data-source-image-shell>
-                                    <img src="${this.esc(source.imageUrl)}" alt="${this.esc(source.title)}" data-source-image>
+                        <tr class="library-row" data-id="${source.id}">
+                            <td>
+                                <div class="library-title-cell">
+                                    ${source.imageUrl ? `
+                                        <div class="library-title-thumb" data-source-image-shell>
+                                            <img src="${this.esc(source.imageUrl)}" alt="${this.esc(titleText)}" data-source-image>
+                                        </div>
+                                    ` : `
+                                        <div class="library-title-icon" aria-hidden="true">${sourceIcon}</div>
+                                    `}
+                                    <div class="vocab-text table-preview-line" title="${this.esc(titleText)}">${this.esc(titleText)}</div>
                                 </div>
-                            ` : ''}
-                            <div class="card-header">
-                                <div class="card-title-stack">
-                                    <div class="card-title" title="${this.esc(source.title)}">${this.esc(source.title)}</div>
+                            </td>
+                            <td>
+                                <div class="table-preview-line" title="${this.esc(previewText)}">${this.esc(previewText)}</div>
+                            </td>
+                            <td><span class="type-badge ${sourceType}">${sourceType}</span></td>
+                            <td><span class="library-inline-meta">${counts[source.id] || 0} items</span></td>
+                            <td><span class="library-inline-meta">${this.formatDate(source.createdAt)}</span></td>
+                            <td><div class="table-preview-line" title="${this.esc(languageText)}">${this.esc(languageText)}</div></td>
+                            <td><div class="table-preview-line" title="${this.esc(tagsText)}">${this.esc(tagsText)}</div></td>
+                            <td class="actions-cell">
+                                <div class="table-actions">
+                                    <button type="button" class="icon-action-btn" data-source-action="edit" title="Edit text">✏️</button>
+                                    <button type="button" class="icon-action-btn icon-action-danger" data-source-action="delete" title="Remove text">✕</button>
                                 </div>
-                                <div class="card-header-side">
-                                    <span class="type-badge ${source.sourceType}">${source.sourceType}</span>
-                                    <div class="card-actions">
-                                        <button type="button" class="icon-action-btn" data-source-action="edit" title="Edit text">✏️</button>
-                                        <button type="button" class="icon-action-btn icon-action-danger" data-source-action="delete" title="Remove text">✕</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-preview" title="${this.esc(previewText)}">${this.esc(previewText)}</div>
-                            <div class="card-meta">
-                                <span>📝 ${counts[source.id] || 0} items</span>
-                                <span>${this.formatDate(source.createdAt)}</span>
-                                ${source.language ? `<span>🌐 ${this.esc(source.language)}</span>` : ''}
-                            </div>
-                            ${source.tags && source.tags.length > 0 ? `
-                                <div class="card-tags">
-                                    ${source.tags.map(tag => `<span class="tag">${this.esc(tag)}</span>`).join('')}
-                                </div>
-                            ` : ''}
-                        </div>
+                            </td>
+                        </tr>
                     `;
                     }).join('')}
+                        </tbody>
+                    </table>
                 </div>
+                ${this.renderPaginationControls('library', pagination, 'text')}
             `;
 
-            container.querySelectorAll('.source-card').forEach(card => {
-                card.addEventListener('click', (e) => {
+            container.querySelectorAll('.library-row').forEach(row => {
+                row.addEventListener('click', (e) => {
                     if (e.target.closest('.icon-action-btn')) return;
 
                     clearTimeout(this._libraryCardClickTimer);
-                    const sourceId = parseInt(card.dataset.id, 10);
+                    const sourceId = parseInt(row.dataset.id, 10);
                     this._libraryCardClickTimer = setTimeout(() => {
                         this.openReader(sourceId);
                         this._libraryCardClickTimer = null;
                     }, 220);
                 });
 
-                card.addEventListener('dblclick', (e) => {
+                row.addEventListener('dblclick', (e) => {
                     if (e.target.closest('.icon-action-btn')) return;
 
                     clearTimeout(this._libraryCardClickTimer);
                     this._libraryCardClickTimer = null;
-                    const sourceId = parseInt(card.dataset.id, 10);
+                    const sourceId = parseInt(row.dataset.id, 10);
                     const source = visibleSources.find(entry => entry.id === sourceId);
                     if (source) {
                         this.showEditSourceModal({
@@ -2866,8 +3058,8 @@ class App {
             container.querySelectorAll('.icon-action-btn[data-source-action]').forEach(button => {
                 button.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    const card = button.closest('.source-card');
-                    const sourceId = parseInt(card.dataset.id, 10);
+                    const row = button.closest('.library-row');
+                    const sourceId = parseInt(row.dataset.id, 10);
                     const source = visibleSources.find(entry => entry.id === sourceId);
                     if (!source) return;
 
@@ -2884,9 +3076,14 @@ class App {
             });
 
             this.bindSourceImageFallback(container);
+            this.bindPaginationControls(container, 'library', () => renderCards(visibleSources));
         };
 
-        const applyFilters = () => {
+        const applyFilters = ({ resetPage = false } = {}) => {
+            if (resetPage) {
+                this.setPaginationPage('library', 1);
+            }
+
             const search = document.getElementById('library-search').value.trim().toLowerCase();
             const type = document.getElementById('library-filter-type').value;
             const language = document.getElementById('library-filter-language').value;
@@ -2967,7 +3164,7 @@ class App {
         document.getElementById('lib-add')?.addEventListener('click', () => this.showAddSourceModal());
         ['library-search', 'library-filter-type', 'library-filter-language', 'library-filter-tag', 'library-sort'].forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener(id === 'library-search' ? 'input' : 'change', applyFilters);
+            el.addEventListener(id === 'library-search' ? 'input' : 'change', () => applyFilters({ resetPage: true }));
         });
         this.bindLibraryDropzone(view);
         applyFilters();
@@ -4134,7 +4331,7 @@ class App {
                 </select>
             </div>
 
-            <div id="vocab-table-container" class="vocab-table-container">${this.renderVocabTable(filteredItems, sourceMap)}</div>
+            <div id="vocab-table-container" class="vocab-table-container"></div>
         `;
 
         document.getElementById('vocab-search').value = this.vocabFilters.search;
@@ -4143,12 +4340,23 @@ class App {
         document.getElementById('vocab-filter-mastery').value = this.vocabFilters.mastery;
         document.getElementById('vocab-sort').value = this.vocabFilters.sort;
 
-        this.applyVocabColumnWidths(document.getElementById('vocab-table-container'));
+        const renderFilteredItems = visibleItems => {
+            const tableContainer = document.getElementById('vocab-table-container');
+            if (!tableContainer) return;
+
+            tableContainer.innerHTML = this.renderVocabTable(visibleItems, sourceMap);
+            this.applyVocabColumnWidths(tableContainer);
+            this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
+            this.bindVocabColumnResizers();
+            this.bindPaginationControls(tableContainer, 'vocab', () => renderFilteredItems(visibleItems));
+        };
+
+        renderFilteredItems(filteredItems);
 
         ['vocab-search', 'vocab-filter-category', 'vocab-filter-source', 'vocab-filter-mastery', 'vocab-sort'].forEach(id => {
             const el = document.getElementById(id);
             el.addEventListener(id === 'vocab-search' ? 'input' : 'change', () => {
-                this.applyVocabFilters(items, sourceMap, categories, sourceOptions);
+                this.applyVocabFilters(items, sourceMap, categories, sourceOptions, { resetPage: true });
             });
         });
 
@@ -4160,9 +4368,6 @@ class App {
             const selectedCategory = document.getElementById('vocab-filter-category')?.value || '';
             this.showImportItemListModal({ category: selectedCategory });
         });
-
-        this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
-        this.bindVocabColumnResizers();
     }
 
     getVocabSourceOptions(items, sourceMap = {}) {
@@ -4250,7 +4455,11 @@ class App {
         return items;
     }
 
-    applyVocabFilters(items, sourceMap, categories, sourceOptions) {
+    applyVocabFilters(items, sourceMap, categories, sourceOptions, options = {}) {
+        if (options.resetPage) {
+            this.setPaginationPage('vocab', 1);
+        }
+
         this.vocabFilters = this.normalizeVocabFilters(
             categories,
             sourceOptions,
@@ -4264,10 +4473,15 @@ class App {
         const tableContainer = document.getElementById('vocab-table-container');
         if (!tableContainer) return;
 
-        tableContainer.innerHTML = this.renderVocabTable(filteredItems, sourceMap);
-        this.applyVocabColumnWidths(tableContainer);
-        this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
-        this.bindVocabColumnResizers();
+        const renderFilteredItems = visibleItems => {
+            tableContainer.innerHTML = this.renderVocabTable(visibleItems, sourceMap);
+            this.applyVocabColumnWidths(tableContainer);
+            this.bindVocabTableEvents(items, sourceMap, categories, sourceOptions);
+            this.bindVocabColumnResizers();
+            this.bindPaginationControls(tableContainer, 'vocab', () => renderFilteredItems(visibleItems));
+        };
+
+        renderFilteredItems(filteredItems);
     }
 
     applyVocabColumnWidths(container = document.getElementById('vocab-table-container')) {
@@ -4282,6 +4496,7 @@ class App {
         const sources = await this.db.getAllSources();
         const sourceMap = {};
         for (const source of sources) sourceMap[source.id] = source;
+        this.resetPagination('notes');
         const view = document.getElementById('view-notes');
 
         view.innerHTML = `
@@ -4312,10 +4527,23 @@ class App {
                 </select>
             </div>
 
-            <div id="notes-table-container">${this.renderNotesTable(notes, sourceMap)}</div>
+            <div id="notes-table-container"></div>
         `;
 
-        const applyFilters = () => {
+        const renderFilteredNotes = visibleNotes => {
+            const tableContainer = document.getElementById('notes-table-container');
+            if (!tableContainer) return;
+
+            tableContainer.innerHTML = this.renderNotesTable(visibleNotes, sourceMap);
+            this.bindNotesTableEvents();
+            this.bindPaginationControls(tableContainer, 'notes', () => renderFilteredNotes(visibleNotes));
+        };
+
+        const applyFilters = ({ resetPage = false } = {}) => {
+            if (resetPage) {
+                this.setPaginationPage('notes', 1);
+            }
+
             const search = document.getElementById('notes-search').value.toLowerCase();
             const color = document.getElementById('notes-filter-color').value;
             const sourceId = document.getElementById('notes-filter-source').value;
@@ -4338,18 +4566,17 @@ class App {
             if (sort === 'alpha') filtered.sort((a, b) => a.text.localeCompare(b.text));
             if (sort === 'source') filtered.sort((a, b) => this.getSourceLabel(a, sourceMap).localeCompare(this.getSourceLabel(b, sourceMap)));
 
-            document.getElementById('notes-table-container').innerHTML = this.renderNotesTable(filtered, sourceMap);
-            this.bindNotesTableEvents();
+            renderFilteredNotes(filtered);
         };
 
         ['notes-search', 'notes-filter-color', 'notes-filter-source', 'notes-sort'].forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener(id === 'notes-search' ? 'input' : 'change', applyFilters);
+            el.addEventListener(id === 'notes-search' ? 'input' : 'change', () => applyFilters({ resetPage: true }));
         });
 
         document.getElementById('notes-open-library')?.addEventListener('click', () => this.navigate('library'));
 
-        this.bindNotesTableEvents();
+        applyFilters();
     }
 
     renderVocabTable(items, sourceMap) {
@@ -4358,6 +4585,7 @@ class App {
         }
 
         const activeSource = this.vocabFilters.source || '';
+        const pagination = this.paginateEntries('vocab', items);
 
         return `
             <div class="vocab-table-shell">
@@ -4383,7 +4611,7 @@ class App {
                         </tr>
                     </thead>
                     <tbody>
-                        ${items.map(item => {
+                        ${pagination.items.map(item => {
                             const level = item.masteryLevel || 0;
                             const textPreview = item.text || '—';
                             const notePreview = item.note || '—';
@@ -4419,6 +4647,7 @@ class App {
                     </tbody>
                 </table>
             </div>
+            ${this.renderPaginationControls('vocab', pagination, 'item')}
         `;
     }
 
@@ -4427,46 +4656,51 @@ class App {
             return '<div class="empty-state"><div class="empty-icon">📌</div><p>No reading notes match your filters.</p></div>';
         }
 
+        const pagination = this.paginateEntries('notes', notes);
+
         return `
-            <table class="vocab-table">
-                <thead>
-                    <tr>
-                        <th>Selected Text</th>
-                        <th>Note</th>
-                        <th>Color</th>
-                        <th>Source</th>
-                        <th>Added</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${notes.map(note => {
-                        const colorMeta = this.getReadingNoteColorMeta(note.color);
-                        const sourceId = Number.isFinite(note.sourceId) ? note.sourceId : '';
-                        const selectedText = note.text || '—';
-                        const notePreview = note.note || '—';
-                        return `
-                            <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
-                                <td>
-                                    <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
-                                </td>
-                                <td>
-                                    <div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
-                                </td>
-                                <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
-                                <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
-                                <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(note.createdAt)}</td>
-                                <td class="actions-cell">
-                                    <div class="table-actions">
-                                        <button type="button" class="icon-action-btn" data-note-action="edit" data-note-id="${note.id}" data-source-id="${sourceId}" title="Edit note">✏️</button>
-                                        <button type="button" class="icon-action-btn icon-action-danger" data-note-action="delete" data-note-id="${note.id}" data-source-id="${sourceId}" title="Delete note">✕</button>
-                                    </div>
-                                </td>
-                            </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
+            <div class="vocab-table-shell">
+                <table class="vocab-table">
+                    <thead>
+                        <tr>
+                            <th>Selected Text</th>
+                            <th>Note</th>
+                            <th>Color</th>
+                            <th>Source</th>
+                            <th>Added</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pagination.items.map(note => {
+                            const colorMeta = this.getReadingNoteColorMeta(note.color);
+                            const sourceId = Number.isFinite(note.sourceId) ? note.sourceId : '';
+                            const selectedText = note.text || '—';
+                            const notePreview = note.note || '—';
+                            return `
+                                <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
+                                    <td>
+                                        <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
+                                    </td>
+                                    <td>
+                                        <div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
+                                    </td>
+                                    <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
+                                    <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
+                                    <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(note.createdAt)}</td>
+                                    <td class="actions-cell">
+                                        <div class="table-actions">
+                                            <button type="button" class="icon-action-btn" data-note-action="edit" data-note-id="${note.id}" data-source-id="${sourceId}" title="Edit note">✏️</button>
+                                            <button type="button" class="icon-action-btn icon-action-danger" data-note-action="delete" data-note-id="${note.id}" data-source-id="${sourceId}" title="Delete note">✕</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+            ${this.renderPaginationControls('notes', pagination, 'note')}
         `;
     }
 
@@ -4486,7 +4720,7 @@ class App {
 
                 const nextValue = button.dataset.vocabSourceFilter || '';
                 sourceSelect.value = sourceSelect.value === nextValue ? '' : nextValue;
-                this.applyVocabFilters(items, sourceMap, categories, sourceOptions);
+                this.applyVocabFilters(items, sourceMap, categories, sourceOptions, { resetPage: true });
             });
         });
 
