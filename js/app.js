@@ -408,16 +408,17 @@ class App {
         return Array.from({ length: end - start + 1 }, (_, index) => start + index);
     }
 
-    renderPaginationControls(view, pagination, singular, plural = `${singular}s`) {
+    renderPaginationControls(view, pagination, singular, plural = `${singular}s`, extraClass = '') {
         if (pagination.totalItems <= pagination.pageSize) {
             return '';
         }
 
         const noun = pagination.totalItems === 1 ? singular : plural;
         const pageNumbers = this.getPaginationPageNumbers(pagination.page, pagination.totalPages);
+        const className = ['list-pagination', extraClass].filter(Boolean).join(' ');
 
         return `
-            <div class="list-pagination" data-pagination-view="${this.esc(view)}">
+            <div class="${className}" data-pagination-view="${this.esc(view)}">
                 <div class="list-pagination-summary">${this.esc(`Showing ${pagination.startIndex + 1}-${pagination.endIndex} of ${pagination.totalItems} ${noun}`)}</div>
                 <div class="list-pagination-actions">
                     <button type="button" class="list-pagination-btn" data-pagination-target="${pagination.page - 1}" ${pagination.page === 1 ? 'disabled' : ''}>Previous</button>
@@ -2950,6 +2951,7 @@ class App {
             }
 
             container.innerHTML = `
+                ${this.renderPaginationControls('library', pagination, 'text', 'texts', 'list-pagination-top')}
                 <div class="vocab-table-shell">
                     <table class="vocab-table library-table">
                         <colgroup>
@@ -3024,7 +3026,7 @@ class App {
                         </tbody>
                     </table>
                 </div>
-                ${this.renderPaginationControls('library', pagination, 'text')}
+                ${this.renderPaginationControls('library', pagination, 'text', 'texts', 'list-pagination-bottom')}
             `;
 
             container.querySelectorAll('.library-row').forEach(row => {
@@ -3170,7 +3172,11 @@ class App {
         applyFilters();
     }
 
-    showAddSourceModal(initialData = {}) {
+    async showAddSourceModal(initialData = {}) {
+        const selectedTags = this.normalizeTagList(initialData.tags || []);
+        const tagChoices = await this.getSourceTagChoices(selectedTags);
+        const tagMarkup = this.buildSourceTagMarkup(tagChoices, selectedTags);
+
         this.showModal(`
             <h3>📝 Add New Text</h3>
             <form id="add-source-form">
@@ -3194,8 +3200,13 @@ class App {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Tags <span class="form-hint">(comma-separated)</span></label>
-                    <input type="text" id="src-tags" value="${this.esc((initialData.tags || []).join(', '))}" placeholder="e.g., N3, news, conversation">
+                    <label>Tags <span class="form-hint">pick existing ones or add new ones</span></label>
+                    ${tagMarkup ? `
+                        <div class="category-chip-row">${tagMarkup}</div>
+                    ` : '<div class="form-hint">No saved tags yet. Add your first ones below.</div>'}
+                    <div class="inline-input-row">
+                        <input type="text" id="src-tags" value="" placeholder="Add new tags, comma-separated">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Article Image URL <span class="form-hint">optional, shown in the library and reader</span></label>
@@ -3222,20 +3233,19 @@ class App {
             </form>
         `, { size: 'modal-lg' });
 
+        const form = document.getElementById('add-source-form');
         this.bindSourceFileUpload();
         this.bindSourceImageControls();
+        this.bindSourceTagChips(form);
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
-        document.getElementById('add-source-form').addEventListener('submit', async (e) => {
+        form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const title = document.getElementById('src-title').value.trim();
             const content = document.getElementById('src-content').value;
             if (!title || !content.trim()) return;
 
-            const tags = document.getElementById('src-tags').value
-                .split(',')
-                .map(tag => tag.trim())
-                .filter(Boolean);
+            const tags = this.getSourceTagsFromForm(form);
 
             await this.saveSource({
                 title,
@@ -3589,6 +3599,66 @@ class App {
         return categories.map(category => `
             <button type="button" class="category-chip ${category === selectedCategory ? 'active' : ''}" data-category="${this.esc(category)}">${this.esc(category)}</button>
         `).join('');
+    }
+
+    normalizeTagList(tags = []) {
+        const seen = new Set();
+        return (Array.isArray(tags) ? tags : []).reduce((list, tag) => {
+            const value = String(tag || '').trim();
+            const key = value.toLowerCase();
+
+            if (!value || seen.has(key)) {
+                return list;
+            }
+
+            seen.add(key);
+            list.push(value);
+            return list;
+        }, []);
+    }
+
+    parseTagInput(value = '') {
+        return this.normalizeTagList(String(value || '').split(/[,，]/));
+    }
+
+    async getSourceTagChoices(extraTags = []) {
+        const sources = await this.db.getAllSources();
+        const allTags = [];
+
+        sources.forEach(source => {
+            allTags.push(...(Array.isArray(source.tags) ? source.tags : []));
+        });
+
+        allTags.push(...(Array.isArray(extraTags) ? extraTags : []));
+
+        return this.normalizeTagList(allTags).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+    }
+
+    buildSourceTagMarkup(tagChoices = [], selectedTags = []) {
+        const selectedKeys = new Set(this.normalizeTagList(selectedTags).map(tag => tag.toLowerCase()));
+
+        return tagChoices.map(tag => `
+            <button type="button" class="category-chip ${selectedKeys.has(tag.toLowerCase()) ? 'active' : ''}" data-source-tag="${this.esc(tag)}">${this.esc(tag)}</button>
+        `).join('');
+    }
+
+    bindSourceTagChips(form) {
+        if (!form) return;
+
+        form.querySelectorAll('[data-source-tag]').forEach(chip => {
+            chip.addEventListener('click', () => {
+                chip.classList.toggle('active');
+            });
+        });
+    }
+
+    getSourceTagsFromForm(form) {
+        if (!form) return [];
+
+        const selectedTags = [...form.querySelectorAll('[data-source-tag].active')].map(chip => chip.dataset.sourceTag || '');
+        const customTags = this.parseTagInput(form.querySelector('#src-tags')?.value || '');
+
+        return this.normalizeTagList([...selectedTags, ...customTags]);
     }
 
     suggestCategory(text) {
@@ -4004,6 +4074,9 @@ class App {
 
     async showEditSourceModal(source) {
         const latestSource = await this.db.getSource(source.id) || source;
+        const selectedTags = this.normalizeTagList(latestSource.tags || []);
+        const tagChoices = await this.getSourceTagChoices(selectedTags);
+        const tagMarkup = this.buildSourceTagMarkup(tagChoices, selectedTags);
         const [items, readingNotes] = await Promise.all([
             this.db.getHighlightsBySource(latestSource.id),
             this.db.getReadingNotesBySource(latestSource.id)
@@ -4035,8 +4108,13 @@ class App {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Tags</label>
-                    <input type="text" id="src-tags" value="${this.esc((latestSource.tags || []).join(', '))}">
+                    <label>Tags <span class="form-hint">pick existing ones or add new ones</span></label>
+                    ${tagMarkup ? `
+                        <div class="category-chip-row">${tagMarkup}</div>
+                    ` : '<div class="form-hint">No saved tags yet. Add your first ones below.</div>'}
+                    <div class="inline-input-row">
+                        <input type="text" id="src-tags" value="" placeholder="Add new tags, comma-separated">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Article Image URL <span class="form-hint">optional, shown in the library and reader</span></label>
@@ -4068,11 +4146,13 @@ class App {
             </form>
         `, { size: 'modal-lg' });
 
+        const form = document.getElementById('edit-source-form');
         this.bindSourceFileUpload();
         this.bindSourceImageControls();
+        this.bindSourceTagChips(form);
 
         document.getElementById('src-cancel').addEventListener('click', () => this.closeModal());
-        document.getElementById('edit-source-form').addEventListener('submit', async (e) => {
+        form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const nextTitle = document.getElementById('src-title').value.trim();
             const nextContent = document.getElementById('src-content').value;
@@ -4093,7 +4173,7 @@ class App {
                 language: document.getElementById('src-lang').value.trim(),
                 imageUrl: document.getElementById('src-image').value.trim(),
                 content: nextContent,
-                tags: document.getElementById('src-tags').value.split(',').map(tag => tag.trim()).filter(Boolean)
+                tags: this.getSourceTagsFromForm(form)
             };
 
             await this.db.updateSource(updatedSource);
@@ -4588,6 +4668,7 @@ class App {
         const pagination = this.paginateEntries('vocab', items);
 
         return `
+            ${this.renderPaginationControls('vocab', pagination, 'item', 'items', 'list-pagination-top')}
             <div class="vocab-table-shell">
                 <table class="vocab-table vocab-table-items">
                     <colgroup>
@@ -4647,7 +4728,7 @@ class App {
                     </tbody>
                 </table>
             </div>
-            ${this.renderPaginationControls('vocab', pagination, 'item')}
+            ${this.renderPaginationControls('vocab', pagination, 'item', 'items', 'list-pagination-bottom')}
         `;
     }
 
@@ -4659,6 +4740,7 @@ class App {
         const pagination = this.paginateEntries('notes', notes);
 
         return `
+            ${this.renderPaginationControls('notes', pagination, 'note', 'notes', 'list-pagination-top')}
             <div class="vocab-table-shell">
                 <table class="vocab-table">
                     <thead>
@@ -4700,7 +4782,7 @@ class App {
                     </tbody>
                 </table>
             </div>
-            ${this.renderPaginationControls('notes', pagination, 'note')}
+            ${this.renderPaginationControls('notes', pagination, 'note', 'notes', 'list-pagination-bottom')}
         `;
     }
 

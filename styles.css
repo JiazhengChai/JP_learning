@@ -1387,6 +1387,13 @@ nav { flex: 1; padding: 12px 0; }
     flex-wrap: wrap;
     margin-top: 14px;
 }
+.list-pagination-top {
+    margin-top: 0;
+    margin-bottom: 14px;
+}
+.list-pagination-bottom {
+    margin-top: 14px;
+}
 .list-pagination-summary {
     font-size: 0.8rem;
     color: var(--text-secondary);
