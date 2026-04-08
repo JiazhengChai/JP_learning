@@ -3057,6 +3057,18 @@ class App {
     }
 
     async openReader(sourceId, focus = null) {
+        const sameActiveSource = this.currentView === 'reader' && this.currentSource?.id === sourceId;
+
+        if (sameActiveSource) {
+            if (!focus) {
+                return;
+            }
+
+            if (this.focusReaderTarget(focus)) {
+                return;
+            }
+        }
+
         await this.navigate('reader', { sourceId });
         if (focus) {
             this.focusReaderTarget(focus);
