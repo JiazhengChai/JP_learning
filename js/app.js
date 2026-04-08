@@ -3049,6 +3049,15 @@ class App {
                 tags
             }, { closeModal: true, backupReason: 'source add' });
         });
+    }
+
+    async extractTextFromFile(file) {
+        const sourceData = await this.extractSourceDataFromFile(file);
+        return sourceData.content;
+    }
+
+    async openReader(sourceId, focus = null) {
+        await this.navigate('reader', { sourceId });
         if (focus) {
             this.focusReaderTarget(focus);
         }
