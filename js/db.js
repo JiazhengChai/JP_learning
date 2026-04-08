@@ -479,16 +479,22 @@ class Database {
         };
     }
 
-    async exportAll() {
+    async exportAll(options = {}) {
         const sources = await this.getAllSources();
         const highlights = await this.getAllHighlights();
         const readingNotes = await this.getAllReadingNotes();
+        const backupName = String(options?.metadata?.backupName || '').trim();
         return {
             format: BACKUP_FORMAT,
             backupVersion: BACKUP_VERSION,
             version: DB_VERSION,
             schemaVersion: DB_VERSION,
             exportedAt: Date.now(),
+            ...(backupName ? {
+                metadata: {
+                    backupName
+                }
+            } : {}),
             sources,
             highlights,
             readingNotes,

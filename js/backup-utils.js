@@ -2,13 +2,47 @@
     const DEFAULT_BACKUP_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
     const SEALED_BACKUP_PREFIX = 'LLB2';
     const BACKUP_FILE_NAME_PATTERN = /^langlens\-(latest\-backup|backup\-([0-9]{4}\-[0-9]{2}\-[0-9]{2}_[0-9]{2}\-[0-9]{2}\-[0-9]{2}Z))(\-encrypted)?\.json$/i;
+    const INVALID_BACKUP_FILE_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/g;
 
     class BackupUtils {
+        static normalizeBackupName(name) {
+            const trimmed = String(name ?? '')
+                .trim()
+                .replace(/\.json$/i, '')
+                .replace(/\s+/g, ' ');
+
+            return trimmed
+                .replace(INVALID_BACKUP_FILE_NAME_CHARS, '-')
+                .replace(/^[. ]+|[. ]+$/g, '')
+                .trim();
+        }
+
+        static getBackupFileName(backupName, { encrypted = false, previous = false, fallbackName = '' } = {}) {
+            const normalized = BackupUtils.normalizeBackupName(backupName)
+                || BackupUtils.normalizeBackupName(fallbackName);
+            if (!normalized) {
+                return '';
+            }
+
+            return `${normalized}${encrypted ? '-encrypted' : ''}${previous ? '-previous' : ''}.json`;
+        }
+
+        static getBackupFileSet(backupName, options = {}) {
+            return {
+                primary: BackupUtils.getBackupFileName(backupName, options),
+                previous: BackupUtils.getBackupFileName(backupName, {
+                    ...options,
+                    previous: true
+                })
+            };
+        }
+
         static normalizePassphrase(passphrase) {
             return String(passphrase ?? '');
         }
 
         static backupSummary(data = {}) {
+            const backupName = BackupUtils.normalizeBackupName(data?.metadata?.backupName);
             return {
                 exportedAt: data.exportedAt || Date.now(),
                 schemaVersion: data.schemaVersion || data.version || 0,
@@ -17,6 +51,9 @@
                     sources: Array.isArray(data.sources) ? data.sources.length : 0,
                     highlights: Array.isArray(data.highlights) ? data.highlights.length : 0,
                     readingNotes: Array.isArray(data.readingNotes) ? data.readingNotes.length : 0
+                },
+                metadata: {
+                    backupName
                 }
             };
         }

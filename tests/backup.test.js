@@ -121,6 +121,21 @@ test('settings store persists structured values for backup preferences', async (
     db.db.close();
 });
 
+test('exports can include the configured backup name in metadata', async () => {
+    const db = await freshDatabase();
+    const exported = await db.exportAll({
+        metadata: {
+            backupName: 'Japanese Study Library'
+        }
+    });
+
+    assert.deepEqual(exported.metadata, {
+        backupName: 'Japanese Study Library'
+    });
+
+    db.db.close();
+});
+
 test('encrypted backups are sealed and decrypt successfully', async () => {
     const encryptedBackup = await BackupUtils.encryptBackupData(plainFixture, 'langlens-fixture-passphrase', webcrypto, {
         salt: Uint8Array.from([11, 22, 33, 44, 55, 66, 77, 88, 99, 111, 123, 135, 147, 159, 171, 183]),
@@ -194,6 +209,16 @@ test('backup reminder helper flags missing and stale backups only when there is 
     assert.equal(stale.shouldShow, true);
     assert.equal(fresh.shouldShow, false);
     assert.equal(empty.shouldShow, false);
+});
+
+test('backup filename helper builds named current and previous backup files', () => {
+    assert.equal(BackupUtils.normalizeBackupName('  Japanese Study Library.json  '), 'Japanese Study Library');
+    assert.equal(BackupUtils.getBackupFileName('Japanese Study Library', { encrypted: true }), 'Japanese Study Library-encrypted.json');
+    assert.equal(BackupUtils.getBackupFileName('Japanese Study Library', { encrypted: true, previous: true }), 'Japanese Study Library-encrypted-previous.json');
+    assert.deepEqual(BackupUtils.getBackupFileSet('Japanese Study Library'), {
+        primary: 'Japanese Study Library.json',
+        previous: 'Japanese Study Library-previous.json'
+    });
 });
 
 test('backup filename helper recognizes rolling and timestamped backups', () => {

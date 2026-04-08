@@ -80,16 +80,17 @@ All app data is stored in the browser using IndexedDB. That means:
 
 ## Backup And Restore
 
-- Use Backup to save an encrypted backup file by default. Passphrases are optional, and plain JSON now requires an explicit warning confirmation.
-- On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving.
+- Use Backup to save an encrypted backup file by default. Passphrases are optional, plain JSON now requires an explicit warning confirmation, and each backup stores the user-chosen backup name in JSON metadata.
+- Give the backup a name once, then LangLens keeps rewriting that named file instead of creating a new timestamped JSON every time.
+- On browsers with file system access, manual backups write to the remembered folder or ask you to choose one before saving, then copy the previous version into a matching `-previous` file before overwriting the current one.
 - On browsers without a save or folder picker, LangLens falls back to the browser's normal download flow.
 - Encrypted backups keep the saved file unreadable without the passphrase.
 - Use Restore to inspect a backup before applying it.
 - Replace restore is best for full recovery on a new browser.
 - Merge restore is best for combining two libraries without wiping the current one.
-- On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and let LangLens auto-update one rolling encrypted latest-backup file after changes.
+- On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and let LangLens auto-update the named encrypted backup file after changes.
 - That folder can be a cloud-synced desktop folder, which gives you automatic off-device backup without adding a backend.
-- If a sync folder is configured, Restore can pull the rolling latest encrypted backup or the newest timestamped snapshot directly from that folder.
+- If a sync folder is configured, Restore can pull the named current backup file directly from that folder, then fall back to the `-previous` safety copy and older legacy LangLens backup names.
 - The backup center lets you choose the reminder threshold in days.
 - After upgrading older local databases, the dashboard shows a short migration notice pointing users to the new backup tools.
 

@@ -23,6 +23,7 @@ class App {
             folderHandle: null,
             folderName: '',
             folderPermission: 'prompt',
+            preferredBackupName: '',
             autoSaveEnabled: localStorage.getItem('langlens-backup-auto-save') === 'true',
             autoSaveOptOut: localStorage.getItem('langlens-backup-auto-save-opt-out') === 'true',
             backupThresholdMs: typeof BackupUtils !== 'undefined' ? BackupUtils.DEFAULT_BACKUP_THRESHOLD_MS : 7 * 24 * 60 * 60 * 1000,
@@ -1325,13 +1326,13 @@ class App {
 
     backupMethodLabel(method) {
         return {
-            download: 'downloaded plain JSON',
-            'download-encrypted': 'downloaded encrypted backup',
-            folder: 'saved plain JSON to folder',
-            'folder-encrypted': 'saved encrypted backup to folder',
-            'folder-auto': 'auto-saved rolling encrypted backup',
-            'save-prompt': 'saved plain JSON via prompt',
-            'save-prompt-encrypted': 'saved encrypted backup via prompt'
+            download: 'downloaded named plain JSON',
+            'download-encrypted': 'downloaded named encrypted backup',
+            folder: 'saved named plain JSON to folder',
+            'folder-encrypted': 'saved named encrypted backup to folder',
+            'folder-auto': 'auto-saved named encrypted backup',
+            'save-prompt': 'saved named plain JSON via prompt',
+            'save-prompt-encrypted': 'saved named encrypted backup via prompt'
         }[method] || 'saved';
     }
 
@@ -1354,6 +1355,47 @@ class App {
 
     hasAutoBackupTarget() {
         return !!this.backupState.folderHandle && this.backupState.folderPermission === 'granted';
+    }
+
+    getPreferredBackupName() {
+        return BackupUtils.normalizeBackupName(this.backupState.preferredBackupName);
+    }
+
+    async setPreferredBackupName(name) {
+        const normalized = BackupUtils.normalizeBackupName(name);
+        if (normalized === this.backupState.preferredBackupName) {
+            return normalized;
+        }
+
+        this.backupState.preferredBackupName = normalized;
+        if (!normalized && this.backupState.autoSaveEnabled) {
+            this.backupState.autoSaveEnabled = false;
+            this.persistAutoSavePreference();
+        }
+        if (normalized) {
+            await this.db.setSetting('backup-name', normalized);
+        } else {
+            await this.db.deleteSetting('backup-name');
+        }
+
+        this.updateBackupFooter();
+        return normalized;
+    }
+
+    requireBackupName(name = this.backupState.preferredBackupName) {
+        const normalized = BackupUtils.normalizeBackupName(name);
+        if (!normalized) {
+            throw new Error('Enter a backup name first');
+        }
+        return normalized;
+    }
+
+    getBackupFileName({ backupName = this.backupState.preferredBackupName, encrypted = false, previous = false } = {}) {
+        return BackupUtils.getBackupFileName(backupName, { encrypted, previous });
+    }
+
+    getBackupFileSet({ backupName = this.backupState.preferredBackupName, encrypted = false } = {}) {
+        return BackupUtils.getBackupFileSet(backupName, { encrypted });
     }
 
     persistAutoSavePreference() {
@@ -1379,7 +1421,7 @@ class App {
     }
 
     maybeArmAutoBackup() {
-        if (this.backupState.autoSaveOptOut || !this.hasAutoBackupTarget()) {
+        if (this.backupState.autoSaveOptOut || !this.hasAutoBackupTarget() || !this.getPreferredBackupName()) {
             return false;
         }
 
@@ -1481,6 +1523,10 @@ class App {
         const node = document.getElementById('backup-footer-status');
         if (!node) return;
 
+        const preferredBackupName = this.getPreferredBackupName();
+        const encryptedFileSet = preferredBackupName
+            ? this.getBackupFileSet({ backupName: preferredBackupName, encrypted: true })
+            : null;
         const storageLine = this.backupState.persistSupported
             ? (this.backupState.persisted ? 'Persistent storage enabled' : 'Persistent storage not granted')
             : 'Persistent storage unavailable';
@@ -1490,12 +1536,15 @@ class App {
         const folderLine = this.backupState.folderHandle
             ? `Sync folder: ${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
             : 'Sync folder not configured';
-        const autoLine = this.backupState.autoSaveEnabled && this.hasAutoBackupTarget()
-            ? `Auto-backup on: rewrites ${this.getBackupFileName({ encrypted: true, latest: true })} in the sync folder`
+        const nameLine = preferredBackupName
+            ? `Backup name: ${preferredBackupName}`
+            : 'Backup name not set';
+        const autoLine = this.backupState.autoSaveEnabled && this.hasAutoBackupTarget() && encryptedFileSet
+            ? `Auto-backup on: rewrites ${encryptedFileSet.primary} and keeps ${encryptedFileSet.previous}`
             : 'Auto-backup off';
         const fileLine = this.describeRecentBackupFileLine();
 
-        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(autoLine)}</div><div>${this.esc(fileLine)}</div>`;
+        node.innerHTML = `<div>${this.esc(storageLine)}</div><div>${this.esc(backupLine)}</div><div>${this.esc(folderLine)}</div><div>${this.esc(nameLine)}</div><div>${this.esc(autoLine)}</div><div>${this.esc(fileLine)}</div>`;
     }
 
     async refreshBackupState() {
@@ -1539,6 +1588,12 @@ class App {
         const thresholdDays = await this.db.getSetting('backup-reminder-days');
         if (Number.isFinite(thresholdDays) && thresholdDays > 0) {
             this.backupState.backupThresholdMs = thresholdDays * 24 * 60 * 60 * 1000;
+        }
+
+        this.backupState.preferredBackupName = BackupUtils.normalizeBackupName(await this.db.getSetting('backup-name'));
+        if (!this.backupState.preferredBackupName) {
+            this.backupState.autoSaveEnabled = false;
+            this.persistAutoSavePreference();
         }
 
         if (!this.backupState.fsAccessSupported) return;
@@ -1651,9 +1706,95 @@ class App {
         this.updateBackupFooter();
     }
 
+    async getFolderBackupCandidate(handle, name, options = {}) {
+        if (!handle || !name) {
+            return null;
+        }
+
+        try {
+            const entry = await handle.getFileHandle(name);
+            const file = await entry.getFile();
+            return {
+                name,
+                handle: entry,
+                lastModified: Number(file.lastModified) || 0,
+                role: options.role || 'primary',
+                encrypted: !!options.encrypted
+            };
+        } catch (err) {
+            if (err?.name === 'NotFoundError') {
+                return null;
+            }
+            throw err;
+        }
+    }
+
+    pickNamedBackupCandidate(candidates = []) {
+        const normalized = candidates.filter(Boolean);
+        normalized.sort((left, right) => {
+            if (left.role !== right.role) {
+                return left.role === 'primary' ? -1 : 1;
+            }
+
+            if (left.lastModified !== right.lastModified) {
+                return right.lastModified - left.lastModified;
+            }
+
+            if (left.encrypted !== right.encrypted) {
+                return left.encrypted ? -1 : 1;
+            }
+
+            return left.name.localeCompare(right.name);
+        });
+
+        return normalized[0] || null;
+    }
+
+    async duplicateExistingBackupFile(handle, fileSet) {
+        if (!handle || !fileSet?.primary || !fileSet?.previous) {
+            return false;
+        }
+
+        try {
+            const currentHandle = await handle.getFileHandle(fileSet.primary);
+            const currentFile = await currentHandle.getFile();
+            const currentText = await currentFile.text();
+            if (!currentText) {
+                return false;
+            }
+
+            const previousHandle = await handle.getFileHandle(fileSet.previous, { create: true });
+            const previousWritable = await previousHandle.createWritable();
+            await previousWritable.write(currentText);
+            await previousWritable.close();
+            return true;
+        } catch (err) {
+            if (err?.name === 'NotFoundError') {
+                return false;
+            }
+            throw err;
+        }
+    }
+
     async getRestoreCandidateFromFolder(handle) {
         if (!handle || typeof handle.entries !== 'function') {
             return null;
+        }
+
+        const preferredBackupName = this.getPreferredBackupName();
+        if (preferredBackupName) {
+            const encryptedFileSet = this.getBackupFileSet({ backupName: preferredBackupName, encrypted: true });
+            const plainFileSet = this.getBackupFileSet({ backupName: preferredBackupName, encrypted: false });
+            const namedCandidate = this.pickNamedBackupCandidate(await Promise.all([
+                this.getFolderBackupCandidate(handle, encryptedFileSet.primary, { role: 'primary', encrypted: true }),
+                this.getFolderBackupCandidate(handle, plainFileSet.primary, { role: 'primary', encrypted: false }),
+                this.getFolderBackupCandidate(handle, encryptedFileSet.previous, { role: 'previous', encrypted: true }),
+                this.getFolderBackupCandidate(handle, plainFileSet.previous, { role: 'previous', encrypted: false })
+            ]));
+
+            if (namedCandidate) {
+                return namedCandidate;
+            }
         }
 
         const candidates = [];
@@ -1706,15 +1847,6 @@ class App {
         });
     }
 
-    getBackupFileName({ encrypted = false, latest = false } = {}) {
-        if (latest) {
-            return `langlens-latest-backup${encrypted ? '-encrypted' : ''}.json`;
-        }
-
-        const stamp = new Date().toISOString().replace(/[:]/g, '-').replace(/\.\d+Z$/, 'Z').replace('T', '_');
-        return `langlens-backup-${stamp}${encrypted ? '-encrypted' : ''}.json`;
-    }
-
     downloadText(text, fileName) {
         const blob = new Blob([text], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -1738,7 +1870,12 @@ class App {
     }
 
     async createBackupPackage(options = {}) {
-        const payload = await this.db.exportAll();
+        const backupName = this.requireBackupName(options.backupName);
+        const payload = await this.db.exportAll({
+            metadata: {
+                backupName
+            }
+        });
         const encrypted = options.encrypted !== false;
         if (encrypted) {
             return this.encryptBackupData(payload, options.passphrase || '');
@@ -1779,28 +1916,28 @@ class App {
             : await this.ensureBackupFolder();
         if (!handle) return false;
 
+        const backupName = this.requireBackupName(options.backupName);
         const encrypted = options.encrypted !== false;
+        const fileSet = this.getBackupFileSet({ backupName, encrypted });
+        await this.duplicateExistingBackupFile(handle, fileSet);
         const backup = await this.createBackupPackage({
             encrypted,
-            passphrase: options.passphrase || ''
+            passphrase: options.passphrase || '',
+            backupName
         });
-        const fileName = this.getBackupFileName({
-            encrypted,
-            latest: !!options.useLatestName
-        });
-        const fileHandle = await handle.getFileHandle(fileName, { create: true });
+        const fileHandle = await handle.getFileHandle(fileSet.primary, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(this.stringifyBackupFile(backup));
         await writable.close();
 
         this.recordBackupEvent(encrypted ? (options.auto ? 'folder-auto' : 'folder-encrypted') : 'folder', {
-            fileName
+            fileName: fileSet.primary
         });
         if (!options.quiet) {
             this.maybeArmAutoBackup();
         }
         if (!options.quiet) {
-            this.showToast(`Backup saved to sync folder as ${fileName}`, 'success');
+            this.showToast(`Backup saved to sync folder as ${fileSet.primary}`, 'success');
         }
         return true;
     }
@@ -1811,15 +1948,14 @@ class App {
         }
 
         try {
+            const backupName = this.requireBackupName(options.backupName);
             const encrypted = options.encrypted !== false;
             const backup = await this.createBackupPackage({
                 encrypted,
-                passphrase: options.passphrase || ''
+                passphrase: options.passphrase || '',
+                backupName
             });
-            const fileName = this.getBackupFileName({
-                encrypted,
-                latest: !!options.useLatestName
-            });
+            const fileName = this.getBackupFileName({ backupName, encrypted });
             const fileHandle = await window.showSaveFilePicker({
                 suggestedName: fileName,
                 types: [{
@@ -1843,36 +1979,43 @@ class App {
     }
 
     async createLatestBackupNow() {
-        await this.saveQuickEncryptedBackup({ useLatestName: true });
+        await this.saveQuickEncryptedBackup();
     }
 
     async saveQuickEncryptedBackup(options = {}) {
         try {
+            const backupName = BackupUtils.normalizeBackupName(options.backupName || this.backupState.preferredBackupName);
+            if (!backupName) {
+                this.showToast('Enter a backup name in Backup & Restore first.', 'error');
+                await this.showBackupCenter();
+                return false;
+            }
+
+            await this.setPreferredBackupName(backupName);
             await this.refreshBackupState();
-            const useLatestName = !!options.useLatestName;
 
             let saved = false;
 
             if (this.backupState.folderHandle && await this.getFolderPermission(this.backupState.folderHandle, false) === 'granted') {
                 saved = await this.writeBackupToFolder({
                     encrypted: true,
-                    useLatestName,
+                    backupName,
                     promptForDirectory: false
                 });
             } else if (this.backupState.fileSaveSupported) {
                 saved = await this.writeBackupWithSavePicker({
                     encrypted: true,
-                    useLatestName
+                    backupName
                 });
             } else if (this.backupState.fsAccessSupported) {
                 saved = await this.writeBackupToFolder({
                     encrypted: true,
-                    useLatestName,
+                    backupName,
                     promptForDirectory: true
                 });
             } else {
-                const backup = await this.createBackupPackage({ encrypted: true });
-                const fileName = this.getBackupFileName({ encrypted: true, latest: useLatestName });
+                const backup = await this.createBackupPackage({ encrypted: true, backupName });
+                const fileName = this.getBackupFileName({ backupName, encrypted: true });
                 this.downloadText(this.stringifyBackupFile(backup), fileName);
                 this.recordBackupEvent('download-encrypted');
                 this.showToast('Encrypted backup downloaded to the browser location.', 'success');
@@ -1895,7 +2038,13 @@ class App {
             return false;
         }
 
-        const shouldConfigure = confirm('Restore complete. Choose a sync folder now so future changes can be auto-backed up into one rolling encrypted file?');
+        const backupName = this.getPreferredBackupName();
+        if (!backupName) {
+            return false;
+        }
+
+        const encryptedFileSet = this.getBackupFileSet({ backupName, encrypted: true });
+        const shouldConfigure = confirm(`Restore complete. Choose a sync folder now so future changes can rewrite ${encryptedFileSet.primary} and keep ${encryptedFileSet.previous} as the last version?`);
         if (!shouldConfigure) {
             return false;
         }
@@ -1908,8 +2057,8 @@ class App {
         this.setAutoBackupEnabled(true);
         await this.writeBackupToFolder({
             encrypted: true,
+            backupName,
             quiet: true,
-            useLatestName: true,
             promptForDirectory: false,
             auto: true
         });
@@ -1932,8 +2081,8 @@ class App {
         try {
             const saved = await this.writeBackupToFolder({
                 encrypted: true,
+                backupName: this.getPreferredBackupName(),
                 quiet: true,
-                useLatestName: true,
                 promptForDirectory: false,
                 auto: true
             });
@@ -2011,6 +2160,11 @@ class App {
         await this.updateReviewBadge();
         await this.navigate('dashboard');
 
+        const restoredBackupName = BackupUtils.normalizeBackupName(data?.metadata?.backupName);
+        if (restoredBackupName) {
+            await this.setPreferredBackupName(restoredBackupName);
+        }
+
         let autoBackupReady = this.maybeArmAutoBackup();
         if (!autoBackupReady) {
             autoBackupReady = await this.promptToEnableAutoBackupAfterRestore();
@@ -2032,6 +2186,7 @@ class App {
                     <div class="backup-panel-title">Backup File</div>
                     <div class="backup-info-list">
                         <div class="backup-info-row"><span>File</span><strong>${this.esc(opts.fileName || 'backup.json')}</strong></div>
+                        <div class="backup-info-row"><span>Backup name</span><strong>${this.esc(summary.metadata.backupName || 'Not set')}</strong></div>
                         <div class="backup-info-row"><span>Exported</span><strong>${this.formatDateTime(summary.exportedAt)}</strong></div>
                         <div class="backup-info-row"><span>Schema</span><strong>DB v${summary.schemaVersion || '—'}</strong></div>
                         <div class="backup-info-row"><span>Type</span><strong>${opts.encrypted ? 'Encrypted backup' : 'Plain JSON backup'}</strong></div>
@@ -2123,7 +2278,13 @@ class App {
         const backup = await this.db.exportAll();
         const summary = this.backupSummary(backup);
         const canPromptForBackupLocation = this.backupState.fsAccessSupported || this.backupState.fileSaveSupported;
-        const latestEncryptedFileName = this.getBackupFileName({ encrypted: true, latest: true });
+        const preferredBackupName = this.getPreferredBackupName();
+        const latestEncryptedFileName = preferredBackupName
+            ? this.getBackupFileName({ backupName: preferredBackupName, encrypted: true })
+            : '';
+        const previousEncryptedFileName = preferredBackupName
+            ? this.getBackupFileName({ backupName: preferredBackupName, encrypted: true, previous: true })
+            : '';
         const quotaLine = this.backupState.quota
             ? `${this.formatBytes(this.backupState.usage)} used of ${this.formatBytes(this.backupState.quota)}`
             : 'Usage estimate unavailable';
@@ -2151,6 +2312,7 @@ class App {
                         <div class="backup-info-row"><span>Persistent storage</span><strong>${this.backupState.persistSupported ? (this.backupState.persisted ? 'Enabled' : 'Not granted') : 'Unsupported'}</strong></div>
                         <div class="backup-info-row"><span>Browser estimate</span><strong>${this.esc(quotaLine)}</strong></div>
                         <div class="backup-info-row"><span>Last backup</span><strong>${this.esc(lastBackupLine)}</strong></div>
+                        <div class="backup-info-row"><span>Backup name</span><strong>${this.esc(preferredBackupName || 'Not set')}</strong></div>
                         <div class="backup-info-row"><span>Sync folder</span><strong>${this.esc(folderLine)}</strong></div>
                         <div class="backup-info-row"><span>Last sync write</span><strong>${this.esc(lastSyncWriteLine)}</strong></div>
                         <div class="backup-info-row"><span>Last restore file</span><strong>${this.esc(lastRestoreLine)}</strong></div>
@@ -2183,6 +2345,11 @@ class App {
                 </div>
             </div>
             <form id="backup-export-form">
+                <div class="form-group">
+                    <label for="backup-name">Backup Name</label>
+                    <input type="text" id="backup-name" value="${this.esc(preferredBackupName)}" placeholder="e.g. Japanese study library" maxlength="80">
+                    <div class="backup-field-hint" id="backup-name-hint"></div>
+                </div>
                 <div class="form-group">
                     <label>Backup Format</label>
                     <div class="backup-radio-group">
@@ -2221,11 +2388,13 @@ class App {
                     <button type="submit" class="btn btn-primary" id="backup-submit">${canPromptForBackupLocation ? '💾 Save Encrypted Backup' : '⬇ Download Encrypted Backup'}</button>
                     ${this.backupState.fsAccessSupported ? '<button type="button" class="btn btn-secondary" id="backup-select-folder">📁 Choose Sync Folder</button>' : ''}
                 </div>
-                <div class="backup-field-hint">${canPromptForBackupLocation ? 'Save Backup reuses the remembered sync folder or asks you to choose one before saving.' : 'This browser does not expose a reusable save location, so backups use the normal browser download location.'}</div>
+                <div class="backup-field-hint">${canPromptForBackupLocation ? 'Save Backup reuses the remembered sync folder or asks you to choose one before saving. The main file is rewritten on each save.' : 'This browser does not expose a reusable save location, so backups use the normal browser download location with the same requested file name.'}</div>
                 ${this.backupState.fsAccessSupported ? `
                     <div class="backup-folder-box">
                         <label class="backup-checkbox"><input type="checkbox" id="backup-auto-save" ${this.backupState.autoSaveEnabled ? 'checked' : ''}> Auto-backup encrypted snapshots to the selected folder after changes</label>
-                        <div class="backup-field-hint">The first successful folder backup arms this automatically unless you turn it off. Auto-backup rewrites ${latestEncryptedFileName} after changes settle, so it keeps one rolling file instead of creating a new JSON every time. Restoring from the sync folder prefers that rolling latest file, then falls back to the newest timestamped snapshot.</div>
+                        <div class="backup-field-hint" id="backup-auto-save-hint">${preferredBackupName
+                            ? `The first successful folder backup arms this automatically unless you turn it off. Auto-backup rewrites ${latestEncryptedFileName} after changes settle and keeps the last version in ${previousEncryptedFileName}. Restoring from the sync folder prefers the current file, then the previous copy, then legacy LangLens backup names.`
+                            : 'Enter a backup name before enabling auto-backup. That name is stored in the JSON metadata and reused for the current and previous encrypted backup files.'}</div>
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -2246,10 +2415,46 @@ class App {
             }
         };
 
+        const updateBackupNamePreview = () => {
+            const backupNameInput = document.getElementById('backup-name');
+            const backupName = BackupUtils.normalizeBackupName(backupNameInput?.value || '');
+            const backupNameHint = document.getElementById('backup-name-hint');
+            const autoSaveHint = document.getElementById('backup-auto-save-hint');
+
+            if (backupNameHint) {
+                if (!backupName) {
+                    backupNameHint.textContent = 'Enter a backup name. It is saved in the JSON metadata and used for the current file plus one previous-version copy.';
+                } else {
+                    const plainCurrent = this.getBackupFileName({ backupName, encrypted: false });
+                    const plainPrevious = this.getBackupFileName({ backupName, encrypted: false, previous: true });
+                    const encryptedCurrent = this.getBackupFileName({ backupName, encrypted: true });
+                    const encryptedPrevious = this.getBackupFileName({ backupName, encrypted: true, previous: true });
+                    backupNameHint.textContent = `Plain backups write ${plainCurrent} and keep ${plainPrevious}. Encrypted backups write ${encryptedCurrent} and keep ${encryptedPrevious}.`;
+                }
+            }
+
+            if (autoSaveHint) {
+                if (!backupName) {
+                    autoSaveHint.textContent = 'Enter a backup name before enabling auto-backup. That name is stored in the JSON metadata and reused for the current and previous encrypted backup files.';
+                } else {
+                    const encryptedCurrent = this.getBackupFileName({ backupName, encrypted: true });
+                    const encryptedPrevious = this.getBackupFileName({ backupName, encrypted: true, previous: true });
+                    autoSaveHint.textContent = `The first successful folder backup arms this automatically unless you turn it off. Auto-backup rewrites ${encryptedCurrent} after changes settle and keeps the last version in ${encryptedPrevious}. Restoring from the sync folder prefers the current file, then the previous copy, then legacy LangLens backup names.`;
+                }
+            }
+        };
+
         document.querySelectorAll('input[name="backup-format"]').forEach(input => {
             input.addEventListener('change', updatePassphraseFields);
         });
         updatePassphraseFields();
+        document.getElementById('backup-name')?.addEventListener('change', async (e) => {
+            const normalized = await this.setPreferredBackupName(e.target.value || '');
+            e.target.value = normalized;
+            updateBackupNamePreview();
+        });
+        document.getElementById('backup-name')?.addEventListener('input', updateBackupNamePreview);
+        updateBackupNamePreview();
 
         document.getElementById('backup-close').addEventListener('click', () => this.closeModal());
         document.getElementById('backup-request-persist')?.addEventListener('click', async () => {
@@ -2290,6 +2495,11 @@ class App {
         });
 
         const getBackupOptions = () => {
+            const backupName = BackupUtils.normalizeBackupName(document.getElementById('backup-name')?.value || '');
+            if (!backupName) {
+                throw new Error('Enter a backup name');
+            }
+
             const encrypted = document.querySelector('input[name="backup-format"]:checked')?.value !== 'plain';
             const passphrase = document.getElementById('backup-passphrase')?.value || '';
             const confirmPassphrase = document.getElementById('backup-passphrase-confirm')?.value || '';
@@ -2300,7 +2510,7 @@ class App {
             } else if (!document.getElementById('backup-plain-confirm')?.checked) {
                 throw new Error('Confirm the plain JSON warning to continue');
             }
-            return { encrypted, passphrase };
+            return { encrypted, passphrase, backupName };
         };
 
         document.getElementById('backup-export-form').addEventListener('submit', async (e) => {
@@ -2326,13 +2536,19 @@ class App {
         document.getElementById('backup-auto-save')?.addEventListener('change', async (e) => {
             try {
                 if (e.target.checked) {
+                    const backupName = BackupUtils.normalizeBackupName(document.getElementById('backup-name')?.value || '');
+                    if (!backupName) {
+                        throw new Error('Enter a backup name before enabling auto-backup');
+                    }
+
+                    await this.setPreferredBackupName(backupName);
                     const handle = await this.ensureBackupFolder();
                     if (!handle) {
                         e.target.checked = false;
                         return;
                     }
                     this.setAutoBackupEnabled(true, { rememberOptOut: true });
-                    await this.writeBackupToFolder({ encrypted: true, quiet: true, useLatestName: true, promptForDirectory: false, auto: true });
+                    await this.writeBackupToFolder({ encrypted: true, backupName, quiet: true, promptForDirectory: false, auto: true });
                     this.showToast('Auto-backup enabled', 'success');
                 } else {
                     this.setAutoBackupEnabled(false, { rememberOptOut: true });
@@ -2833,15 +3049,6 @@ class App {
                 tags
             }, { closeModal: true, backupReason: 'source add' });
         });
-    }
-
-    async extractTextFromFile(file) {
-        const sourceData = await this.extractSourceDataFromFile(file);
-        return sourceData.content;
-    }
-
-    async openReader(sourceId, focus = null) {
-        await this.navigate('reader', { sourceId });
         if (focus) {
             this.focusReaderTarget(focus);
         }
@@ -4652,15 +4859,17 @@ class App {
 
     async exportData(options = {}) {
         try {
+            const backupName = this.requireBackupName(options.backupName || this.backupState.preferredBackupName);
+            await this.setPreferredBackupName(backupName);
             await this.refreshBackupState();
             const encrypted = options.encrypted !== false;
 
             if (this.backupState.fsAccessSupported) {
                 const saved = await this.writeBackupToFolder({
                     encrypted,
+                    backupName,
                     passphrase: options.passphrase || '',
                     promptForDirectory: options.promptForDirectory !== false,
-                    useLatestName: !!options.useLatestName,
                     auto: !!options.auto
                 });
                 if (saved) {
@@ -4672,8 +4881,8 @@ class App {
             if (this.backupState.fileSaveSupported) {
                 const saved = await this.writeBackupWithSavePicker({
                     encrypted,
+                    backupName,
                     passphrase: options.passphrase || '',
-                    useLatestName: !!options.useLatestName
                 });
                 if (saved) {
                     this.closeModal();
@@ -4681,11 +4890,11 @@ class App {
                 return saved;
             }
 
-            const backup = await this.createBackupPackage(options);
-            const fileName = this.getBackupFileName({
-                encrypted,
-                latest: !!options.useLatestName
+            const backup = await this.createBackupPackage({
+                ...options,
+                backupName
             });
+            const fileName = this.getBackupFileName({ backupName, encrypted });
             this.downloadText(this.stringifyBackupFile(backup), fileName);
             this.recordBackupEvent(encrypted ? 'download-encrypted' : 'download');
             this.closeModal();
