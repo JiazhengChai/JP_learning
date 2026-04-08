@@ -3057,19 +3057,21 @@ class App {
     }
 
     async openReader(sourceId, focus = null) {
-        const sameActiveSource = this.currentView === 'reader' && this.currentSource?.id === sourceId;
+        const normalizedSourceId = Number.parseInt(sourceId, 10);
+        const sameActiveSource = this.currentView === 'reader'
+            && Number.isFinite(normalizedSourceId)
+            && this.currentSource?.id === normalizedSourceId;
 
         if (sameActiveSource) {
             if (!focus) {
                 return;
             }
 
-            if (this.focusReaderTarget(focus)) {
-                return;
-            }
+            this.focusReaderTarget(focus);
+            return;
         }
 
-        await this.navigate('reader', { sourceId });
+        await this.navigate('reader', { sourceId: Number.isFinite(normalizedSourceId) ? normalizedSourceId : sourceId });
         if (focus) {
             this.focusReaderTarget(focus);
         }
@@ -3104,7 +3106,23 @@ class App {
 
         this._readerJumpTarget = element;
         element.classList.add('reader-jump-target');
-        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+
+        const main = document.getElementById('main');
+        if (main) {
+            const mainRect = main.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+            const targetTop = main.scrollTop
+                + (elementRect.top - mainRect.top)
+                - ((main.clientHeight - elementRect.height) / 2);
+            const maxTop = Math.max(0, main.scrollHeight - main.clientHeight);
+
+            main.scrollTo({
+                top: Math.min(Math.max(targetTop, 0), maxTop),
+                behavior: 'smooth'
+            });
+        } else {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        }
 
         this._readerJumpTimer = setTimeout(() => {
             element.classList.remove('reader-jump-target');
