@@ -3385,7 +3385,7 @@ class App {
                                     ${this.esc(item.text)}
                                 </div>
                                 <div class="hl-meta-line">${this.esc(item.category || 'General')} · ${item.charCount || item.text.length} chars</div>
-                                ${item.note ? `<div class="hl-note">${this.esc(item.note)}</div>` : ''}
+                                ${item.note ? `<div class="hl-note note-text">${this.esc(item.note)}</div>` : ''}
                             </div>
                         `;
                         }).join('')}
@@ -3400,7 +3400,7 @@ class App {
                                     <div class="hl-text" style="color:var(--${note.color === 'blue' ? 'accent' : note.color === 'green' ? 'success' : note.color === 'red' ? 'danger' : 'warning'});">
                                         📌 ${this.esc(note.text.substring(0, 40))}${note.text.length > 40 ? '…' : ''}
                                     </div>
-                                    <div class="hl-note">${this.esc(note.note)}</div>
+                                    <div class="hl-note note-text">${this.esc(note.note)}</div>
                                 </div>
                             `;
                             }).join('')}
@@ -3984,7 +3984,7 @@ class App {
             <h3>📝 Study Item</h3>
             <div class="selected-text-preview">${this.esc(item.text)}</div>
             <div class="detail-stack">
-                <div><strong>Note:</strong> ${this.esc(item.note || '—')}</div>
+                <div class="note-text"><strong>Note:</strong> ${this.esc(item.note || '—')}</div>
                 <div><strong>Category:</strong> ${this.esc(item.category || 'General')}</div>
                 <div><strong>Added:</strong> ${this.formatDateTime(item.createdAt)}</div>
                 <div><strong>Characters:</strong> ${item.charCount || item.text.length}</div>
@@ -4273,7 +4273,7 @@ class App {
             <h3>📌 Reading Note</h3>
             <div class="selected-text-preview">${this.esc(note.text)}</div>
             <div class="detail-stack">
-                <div>${this.esc(note.note)}</div>
+                <div class="note-text">${this.esc(note.note)}</div>
                 <div><strong>Color:</strong> <span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></div>
                 ${source ? `<div><strong>Source:</strong> ${this.esc(source.title)}</div>` : ''}
                 <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${this.formatDateTime(note.createdAt)}</div>
@@ -4704,7 +4704,7 @@ class App {
                                     <td>
                                         <div class="vocab-text table-preview-line" title="${this.esc(textPreview)}">${this.esc(textPreview)}</div>
                                     </td>
-                                    <td><div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
+                                    <td><div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
                                     <td><span class="tag">${this.esc(item.category || 'General')}</span></td>
                                     <td class="vocab-source-cell">
                                         <button type="button" class="table-filter-chip ${sourceActive ? 'active' : ''}" data-vocab-source-filter="${this.esc(sourceValue)}" title="Filter by ${this.esc(sourceLabel)}">${this.esc(sourceLabel)}</button>
@@ -4765,7 +4765,7 @@ class App {
                                         <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
                                     </td>
                                     <td>
-                                        <div class="table-preview-line" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
+                                        <div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
                                     </td>
                                     <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
                                     <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
@@ -5064,7 +5064,7 @@ class App {
                         ${session.revealed ? `
                             <div class="card-divider"></div>
                             <div class="card-answer">
-                                <div class="card-meaning">${this.esc(card.note || 'No note added')}</div>
+                                <div class="card-meaning note-text">${this.esc(card.note || 'No note added')}</div>
                                 <div class="card-meta-list">
                                     <span>${this.esc(card.category || 'General')}</span>
                                     <span>${card.charCount || card.text.length} chars</span>

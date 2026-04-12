@@ -127,6 +127,10 @@ input, textarea, select { font-family: inherit; }
     font-size: 0.75rem;
     margin-bottom: 4px;
 }
+.note-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
 .inline-input-row {
     margin-top: 10px;
 }
@@ -1340,6 +1344,10 @@ nav { flex: 1; padding: 12px 0; }
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.vocab-table .table-preview-note {
+    text-overflow: clip;
+    white-space: pre-wrap;
 }
 .vocab-table .vocab-reading {
     color: var(--purple);
