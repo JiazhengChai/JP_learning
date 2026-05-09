@@ -326,7 +326,7 @@ test('source imageUrl is normalized and included in exports', async () => {
     db.db.close();
 });
 
-test('file-backed sources and point-anchored notes round-trip through backup export and import', async () => {
+test('file-backed sources and file-region notes round-trip through backup export and import', async () => {
     const db = await freshDatabase();
     const fileDataUrl = 'data:application/pdf;base64,JVBERi0xLjQKJcTl8uXr';
     const sourceId = await db.addSource({
@@ -353,32 +353,62 @@ test('file-backed sources and point-anchored notes round-trip through backup exp
         targetLabel: 'Page 1'
     });
 
+    await db.addReadingNote({
+        sourceId,
+        text: 'Page 2 highlight',
+        note: 'Highlighted the summary box',
+        color: 'yellow',
+        anchorType: 'rect',
+        pageNumber: 2,
+        anchorX: 0.18,
+        anchorY: 0.44,
+        anchorWidth: 0.27,
+        anchorHeight: 0.16,
+        targetLabel: 'Page 2'
+    });
+
     const exported = await db.exportAll();
 
     assert.equal(exported.sources[0].documentKind, 'pdf');
     assert.equal(exported.sources[0].fileName, 'lesson.pdf');
     assert.equal(exported.sources[0].fileMimeType, 'application/pdf');
     assert.equal(exported.sources[0].fileDataUrl, fileDataUrl);
-    assert.equal(exported.readingNotes[0].anchorType, 'point');
-    assert.equal(exported.readingNotes[0].pageNumber, 1);
-    assert.equal(exported.readingNotes[0].anchorX, 0.42);
-    assert.equal(exported.readingNotes[0].anchorY, 0.31);
+    assert.equal(exported.readingNotes.length, 2);
+
+    const exportedPointNote = exported.readingNotes.find(note => note.anchorType === 'point');
+    const exportedRectNote = exported.readingNotes.find(note => note.anchorType === 'rect');
+
+    assert.equal(exportedPointNote.pageNumber, 1);
+    assert.equal(exportedPointNote.anchorX, 0.42);
+    assert.equal(exportedPointNote.anchorY, 0.31);
+    assert.equal(exportedRectNote.pageNumber, 2);
+    assert.equal(exportedRectNote.anchorX, 0.18);
+    assert.equal(exportedRectNote.anchorY, 0.44);
+    assert.equal(exportedRectNote.anchorWidth, 0.27);
+    assert.equal(exportedRectNote.anchorHeight, 0.16);
 
     await db.importAll(exported, { mode: 'replace' });
 
     const [restoredSource] = await db.getAllSources();
-    const [restoredNote] = await db.getAllReadingNotes();
+    const restoredNotes = await db.getAllReadingNotes();
+    const restoredPointNote = restoredNotes.find(note => note.anchorType === 'point');
+    const restoredRectNote = restoredNotes.find(note => note.anchorType === 'rect');
 
     assert.equal(restoredSource.documentKind, 'pdf');
     assert.equal(restoredSource.fileName, 'lesson.pdf');
     assert.equal(restoredSource.fileMimeType, 'application/pdf');
     assert.equal(restoredSource.fileSize, 18);
     assert.equal(restoredSource.fileDataUrl, fileDataUrl);
-    assert.equal(restoredNote.anchorType, 'point');
-    assert.equal(restoredNote.pageNumber, 1);
-    assert.equal(restoredNote.anchorX, 0.42);
-    assert.equal(restoredNote.anchorY, 0.31);
-    assert.equal(restoredNote.targetLabel, 'Page 1');
+    assert.equal(restoredPointNote.pageNumber, 1);
+    assert.equal(restoredPointNote.anchorX, 0.42);
+    assert.equal(restoredPointNote.anchorY, 0.31);
+    assert.equal(restoredPointNote.targetLabel, 'Page 1');
+    assert.equal(restoredRectNote.pageNumber, 2);
+    assert.equal(restoredRectNote.anchorX, 0.18);
+    assert.equal(restoredRectNote.anchorY, 0.44);
+    assert.equal(restoredRectNote.anchorWidth, 0.27);
+    assert.equal(restoredRectNote.anchorHeight, 0.16);
+    assert.equal(restoredRectNote.targetLabel, 'Page 2');
 
     db.db.close();
 });

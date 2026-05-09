@@ -51,7 +51,8 @@ class App {
         this._readerJumpTimer = null;
         this._readerJumpTarget = null;
         this._fileRenderToken = 0;
-        this.readerFileNoteMode = false;
+        this.readerFileNoteMode = '';
+        this._readerFileDrawState = null;
         this.migrationNotice = null;
     }
 
@@ -3510,7 +3511,7 @@ class App {
         if (Number.isFinite(target.highlightId)) {
             selector = `.hl[data-hl-id="${target.highlightId}"]`;
         } else if (Number.isFinite(target.noteId)) {
-            selector = `.reader-file-note-marker[data-note-id="${target.noteId}"], .hl-reading-note[data-note-id="${target.noteId}"]`;
+            selector = `.reader-file-note-box[data-note-id="${target.noteId}"], .reader-file-note-marker[data-note-id="${target.noteId}"], .hl-reading-note[data-note-id="${target.noteId}"]`;
         }
 
         if (!selector) return false;
@@ -3569,10 +3570,10 @@ class App {
         const view = document.getElementById('view-reader');
         const sortedItems = [...items].sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0));
         const sortedReadingNotes = [...readingNotes].sort((a, b) => {
-            const left = a.anchorType === 'point'
+            const left = this.isFileRegionReadingNote(a)
                 ? ((a.pageNumber || 0) * 1000000) + Math.round((a.anchorY || 0) * 1000)
                 : (a.startOffset || 0);
-            const right = b.anchorType === 'point'
+            const right = this.isFileRegionReadingNote(b)
                 ? ((b.pageNumber || 0) * 1000000) + Math.round((b.anchorY || 0) * 1000)
                 : (b.startOffset || 0);
             return left - right;
@@ -3610,12 +3611,17 @@ class App {
                                 <span>${this.esc(source.fileName || source.fileMimeType || 'Stored locally')}</span>
                             </div>
                             ${this.sourceSupportsPinnedNotes(source)
-                                ? '<button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>'
+                                ? `
+                                    <div class="reader-file-toolbar-actions">
+                                        <button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>
+                                        <button class="btn btn-secondary btn-sm" id="reader-draw-file-highlight">🟨 Draw Highlight</button>
+                                    </div>
+                                `
                                 : ''}
                         </div>
                         <div id="reader-file-note-hint" class="reader-file-note-hint">
                             ${this.sourceSupportsPinnedNotes(source)
-                                ? 'Pinned notes stay attached to the same PDF page or image position.'
+                                ? 'Pinned notes and highlight boxes stay attached to the same PDF page or image position.'
                                 : 'This stored file is included in local backups. Inline pins are available for images and PDFs.'}
                         </div>
                         <div id="reader-content" class="reader-content-file">
@@ -3647,9 +3653,7 @@ class App {
                         <h3 style="margin-top:20px;">📌 Reading Notes (${readingNotes.length})</h3>
                         <div id="reader-notes-list">
                             ${sortedReadingNotes.map(note => {
-                                const canJump = note.anchorType === 'point'
-                                    ? Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY)
-                                    : Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+                                const canJump = this.canFocusReadingNote(note);
                                 const locationLabel = this.getReadingNoteLocationLabel(note, source);
                                 return `
                                 <div class="hl-list-item reading-note-item" data-note-id="${note.id}" title="${canJump ? 'Jump to this note in the article' : 'Open note details'}">
@@ -3674,7 +3678,7 @@ class App {
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
         view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
             const targetElement = e.target instanceof Element ? e.target : e.target?.parentElement;
-            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id]')) return;
+            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) return;
 
             this.hideSelectionToolbar();
             window.getSelection()?.removeAllRanges();
@@ -3706,9 +3710,7 @@ class App {
             item.addEventListener('click', async () => {
                 const noteId = parseInt(item.dataset.noteId, 10);
                 const note = readingNotes.find(entry => entry.id === noteId);
-                const canJump = note?.anchorType === 'point'
-                    ? Number.isFinite(note?.anchorX) && Number.isFinite(note?.anchorY)
-                    : Number.isFinite(note?.startOffset) && Number.isFinite(note?.endOffset);
+                const canJump = this.canFocusReadingNote(note);
                 if (canJump) {
                     await this.openReader(source.id, { noteId });
                     return;
@@ -3724,11 +3726,13 @@ class App {
         }
 
         this.hideSelectionToolbar();
-        this.readerFileNoteMode = false;
+        this.readerFileNoteMode = '';
+        this.clearReaderFileHighlightSelection(true);
 
         if (usesFileViewer) {
             await this.renderStoredFileViewer(source, readingNotes);
-            document.getElementById('reader-add-file-note')?.addEventListener('click', () => this.toggleReaderFileNoteMode());
+            document.getElementById('reader-add-file-note')?.addEventListener('click', () => this.toggleReaderFileNoteMode('point'));
+            document.getElementById('reader-draw-file-highlight')?.addEventListener('click', () => this.toggleReaderFileNoteMode('rect'));
             this.updateReaderFileNoteModeUi();
         } else {
             view.querySelectorAll('.hl-reading-note[data-note-id]').forEach(span => {
@@ -3762,6 +3766,19 @@ class App {
             return 'Pinned file note';
         }
 
+        if (note.anchorType === 'rect') {
+            if (String(note.targetLabel || '').trim()) {
+                return `${String(note.targetLabel || '').trim()} highlight`;
+            }
+            if (Number.isFinite(note.pageNumber)) {
+                return `Page ${note.pageNumber} highlight`;
+            }
+            if (source?.documentKind === 'image') {
+                return 'Image highlight';
+            }
+            return 'Highlighted file area';
+        }
+
         if (Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)) {
             return 'Text selection';
         }
@@ -3772,12 +3789,65 @@ class App {
     getReadingNoteDisplayText(note, source = this.currentSource) {
         if (!note) return '';
 
-        if (note.anchorType === 'point') {
+        if (note.anchorType === 'point' || note.anchorType === 'rect') {
             return this.getReadingNoteLocationLabel(note, source) || 'Pinned note';
         }
 
         const text = String(note.text || '').trim();
         return `${text.substring(0, 40)}${text.length > 40 ? '…' : ''}`;
+    }
+
+    isPointReadingNote(note) {
+        return note?.anchorType === 'point'
+            && Number.isFinite(note.anchorX)
+            && Number.isFinite(note.anchorY);
+    }
+
+    isRectReadingNote(note) {
+        return note?.anchorType === 'rect'
+            && Number.isFinite(note.anchorX)
+            && Number.isFinite(note.anchorY)
+            && Number.isFinite(note.anchorWidth)
+            && Number.isFinite(note.anchorHeight);
+    }
+
+    isFileRegionReadingNote(note) {
+        return this.isPointReadingNote(note) || this.isRectReadingNote(note);
+    }
+
+    canFocusReadingNote(note) {
+        return this.isFileRegionReadingNote(note)
+            || (Number.isFinite(note?.startOffset) && Number.isFinite(note?.endOffset));
+    }
+
+    normalizeReaderFileRect(startX, startY, endX, endY) {
+        const left = this.clampNumber(Math.min(startX, endX), 0, 1);
+        const top = this.clampNumber(Math.min(startY, endY), 0, 1);
+        const right = this.clampNumber(Math.max(startX, endX), 0, 1);
+        const bottom = this.clampNumber(Math.max(startY, endY), 0, 1);
+
+        return {
+            anchorX: left,
+            anchorY: top,
+            anchorWidth: Math.max(right - left, 0),
+            anchorHeight: Math.max(bottom - top, 0)
+        };
+    }
+
+    getReaderFileRectStyle(note = {}) {
+        const anchorX = this.clampNumber(note.anchorX, 0, 1);
+        const anchorY = this.clampNumber(note.anchorY, 0, 1);
+        const maxWidth = Math.max(0, 1 - anchorX);
+        const maxHeight = Math.max(0, 1 - anchorY);
+        const anchorWidth = this.clampNumber(note.anchorWidth, 0, maxWidth || 1);
+        const anchorHeight = this.clampNumber(note.anchorHeight, 0, maxHeight || 1);
+
+        return `left:${(anchorX * 100).toFixed(2)}%;top:${(anchorY * 100).toFixed(2)}%;width:${(anchorWidth * 100).toFixed(2)}%;height:${(anchorHeight * 100).toFixed(2)}%;`;
+    }
+
+    applyReaderFileRectStyle(element, rect = {}) {
+        if (!(element instanceof HTMLElement)) return;
+        element.style.cssText = this.getReaderFileRectStyle(rect);
     }
 
     clampNumber(value, min = 0, max = 1) {
@@ -3823,8 +3893,27 @@ class App {
         `;
     }
 
+    renderReaderFileNoteBox(note, options = {}) {
+        const colorMeta = this.getReadingNoteColorMeta(note.color || 'yellow');
+        const title = `${this.getReadingNoteLocationLabel(note, this.currentSource) || 'Highlight note'} — ${note.note || ''}`.trim();
+        const noteId = Number.isFinite(note.id) ? ` data-note-id="${note.id}"` : '';
+        const extraClass = options.preview ? ' reader-file-note-preview' : '';
+        const style = this.getReaderFileRectStyle(note);
+
+        return `
+            <button
+                type="button"
+                class="reader-file-note-box note-color-${colorMeta.value}${extraClass}"
+                ${noteId}
+                style="${style}"
+                title="${this.esc(title)}"
+                ${options.preview ? 'tabindex="-1" aria-hidden="true"' : ''}
+            ></button>
+        `;
+    }
+
     bindReaderFileNoteMarkerClicks(scope = document) {
-        scope.querySelectorAll('.reader-file-note-marker[data-note-id]').forEach(marker => {
+        scope.querySelectorAll('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]').forEach(marker => {
             marker.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.showReadingNoteDetail(parseInt(marker.dataset.noteId, 10), this.currentSource?.id);
@@ -3832,44 +3921,72 @@ class App {
         });
     }
 
-    toggleReaderFileNoteMode(force = null) {
+    toggleReaderFileNoteMode(mode, force = null) {
         if (!this.sourceSupportsPinnedNotes(this.currentSource || {})) {
-            this.readerFileNoteMode = false;
+            this.readerFileNoteMode = '';
+            this.clearReaderFileHighlightSelection(true);
             this.updateReaderFileNoteModeUi();
             return;
         }
 
-        this.readerFileNoteMode = typeof force === 'boolean' ? force : !this.readerFileNoteMode;
+        const targetMode = String(mode || 'point');
+        const isActive = this.readerFileNoteMode === targetMode;
+        this.readerFileNoteMode = typeof force === 'boolean'
+            ? (force ? targetMode : '')
+            : (isActive ? '' : targetMode);
+
+        if (this.readerFileNoteMode !== 'rect') {
+            this.clearReaderFileHighlightSelection(true);
+        }
+
         this.updateReaderFileNoteModeUi();
     }
 
     updateReaderFileNoteModeUi() {
-        const button = document.getElementById('reader-add-file-note');
+        const pointButton = document.getElementById('reader-add-file-note');
+        const rectButton = document.getElementById('reader-draw-file-highlight');
         const hint = document.getElementById('reader-file-note-hint');
         const supportsPinnedNotes = this.sourceSupportsPinnedNotes(this.currentSource || {});
 
-        if (button) {
-            button.textContent = this.readerFileNoteMode ? '✖ Cancel Pin' : '📌 Place Note';
-            button.classList.toggle('btn-primary', this.readerFileNoteMode);
-            button.classList.toggle('btn-secondary', !this.readerFileNoteMode);
+        if (pointButton) {
+            const pointActive = this.readerFileNoteMode === 'point';
+            pointButton.textContent = pointActive ? '✖ Cancel Pin' : '📌 Place Note';
+            pointButton.classList.toggle('btn-primary', pointActive);
+            pointButton.classList.toggle('btn-secondary', !pointActive);
+        }
+
+        if (rectButton) {
+            const rectActive = this.readerFileNoteMode === 'rect';
+            rectButton.textContent = rectActive ? '✖ Cancel Highlight' : '🟨 Draw Highlight';
+            rectButton.classList.toggle('btn-primary', rectActive);
+            rectButton.classList.toggle('btn-secondary', !rectActive);
         }
 
         if (hint) {
-            if (this.readerFileNoteMode) {
+            if (this.readerFileNoteMode === 'point') {
                 hint.textContent = this.currentSource?.documentKind === 'pdf'
                     ? 'Click on the PDF page where you want to pin the note.'
                     : 'Click on the image where you want to pin the note.';
+            } else if (this.readerFileNoteMode === 'rect') {
+                hint.textContent = this.currentSource?.documentKind === 'pdf'
+                    ? 'Drag on the PDF page to draw a highlight box, then add your note.'
+                    : 'Drag on the image to draw a highlight box, then add your note.';
             } else if (supportsPinnedNotes) {
-                hint.textContent = 'Pinned notes stay attached to the same PDF page or image position.';
+                hint.textContent = 'Pinned notes and highlight boxes stay attached to the same PDF page or image position.';
             } else {
                 hint.textContent = 'This stored file is included in local backups. Inline pins are available for images and PDFs.';
             }
         }
+
+        document.querySelectorAll('.reader-file-note-host').forEach(host => {
+            host.classList.toggle('reader-file-note-host-pin-mode', this.readerFileNoteMode === 'point');
+            host.classList.toggle('reader-file-note-host-highlight-mode', this.readerFileNoteMode === 'rect');
+        });
     }
 
     handleReaderFilePlacement(event) {
-        if (!this.currentSource || !this.readerFileNoteMode) return;
-        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id]')) {
+        if (!this.currentSource || this.readerFileNoteMode !== 'point') return;
+        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) {
             return;
         }
 
@@ -3885,7 +4002,7 @@ class App {
         const targetLabel = String(host.dataset.noteTarget || '').trim()
             || (Number.isFinite(pageNumber) ? `Page ${pageNumber}` : this.getSourceDocumentKindLabel(this.currentSource.documentKind));
 
-        this.readerFileNoteMode = false;
+        this.readerFileNoteMode = '';
         this.updateReaderFileNoteModeUi();
 
         this.showAddReadingNoteModal({
@@ -3897,6 +4014,141 @@ class App {
             anchorY,
             targetLabel,
             previewLabel: `${targetLabel} · pinned note`
+        });
+    }
+
+    beginReaderFileHighlightSelection(event) {
+        if (!this.currentSource || this.readerFileNoteMode !== 'rect') return;
+        if (event.button !== 0) return;
+        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) {
+            return;
+        }
+
+        const host = event.currentTarget;
+        if (!(host instanceof HTMLElement)) return;
+
+        const layer = host.querySelector('.reader-file-note-layer');
+        if (!(layer instanceof HTMLElement)) return;
+
+        const rect = host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+
+        const startX = this.clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+        const startY = this.clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+        const pageNumber = Number.parseInt(host.dataset.pageNumber || '', 10);
+        const targetLabel = String(host.dataset.noteTarget || '').trim()
+            || (Number.isFinite(pageNumber) ? `Page ${pageNumber}` : this.getSourceDocumentKindLabel(this.currentSource.documentKind));
+
+        this.clearReaderFileHighlightSelection(true);
+
+        const preview = document.createElement('div');
+        preview.className = 'reader-file-note-box reader-file-note-preview note-color-yellow';
+        preview.setAttribute('aria-hidden', 'true');
+        layer.appendChild(preview);
+
+        this._readerFileDrawState = {
+            host,
+            pointerId: event.pointerId,
+            pageNumber: Number.isFinite(pageNumber) ? pageNumber : null,
+            targetLabel,
+            startX,
+            startY,
+            endX: startX,
+            endY: startY,
+            preview
+        };
+
+        host.setPointerCapture?.(event.pointerId);
+        this.applyReaderFileRectStyle(preview, {
+            anchorX: startX,
+            anchorY: startY,
+            anchorWidth: 0,
+            anchorHeight: 0
+        });
+        event.preventDefault();
+    }
+
+    updateReaderFileHighlightSelection(event) {
+        const state = this._readerFileDrawState;
+        if (!state || state.host !== event.currentTarget || state.pointerId !== event.pointerId) return;
+
+        const rect = state.host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+
+        state.endX = this.clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+        state.endY = this.clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+        this.applyReaderFileRectStyle(state.preview, this.normalizeReaderFileRect(state.startX, state.startY, state.endX, state.endY));
+    }
+
+    clearReaderFileHighlightSelection(preserveMode = false) {
+        const state = this._readerFileDrawState;
+        if (!state) return;
+
+        if (state.preview?.remove) {
+            state.preview.remove();
+        }
+
+        try {
+            if (state.host?.releasePointerCapture && state.host.hasPointerCapture?.(state.pointerId)) {
+                state.host.releasePointerCapture(state.pointerId);
+            }
+        } catch {
+            // Ignore pointer-capture cleanup failures when the browser already released it.
+        }
+
+        this._readerFileDrawState = null;
+
+        if (!preserveMode && this.readerFileNoteMode === 'rect') {
+            this.readerFileNoteMode = '';
+            this.updateReaderFileNoteModeUi();
+        }
+    }
+
+    completeReaderFileHighlightSelection(event) {
+        const state = this._readerFileDrawState;
+        if (!state || state.host !== event.currentTarget || state.pointerId !== event.pointerId) return;
+
+        const hostRect = state.host.getBoundingClientRect();
+        if (!hostRect.width || !hostRect.height) {
+            this.clearReaderFileHighlightSelection(true);
+            return;
+        }
+
+        const rectData = this.normalizeReaderFileRect(state.startX, state.startY, state.endX, state.endY);
+        const pixelWidth = rectData.anchorWidth * hostRect.width;
+        const pixelHeight = rectData.anchorHeight * hostRect.height;
+
+        this.clearReaderFileHighlightSelection(true);
+
+        if (pixelWidth < 10 || pixelHeight < 10) {
+            this.showToast('Drag a larger box to create a highlight note.', 'error');
+            return;
+        }
+
+        this.readerFileNoteMode = '';
+        this.updateReaderFileNoteModeUi();
+
+        this.showAddReadingNoteModal({
+            sourceId: this.currentSource.id,
+            text: state.targetLabel,
+            anchorType: 'rect',
+            pageNumber: state.pageNumber,
+            anchorX: rectData.anchorX,
+            anchorY: rectData.anchorY,
+            anchorWidth: rectData.anchorWidth,
+            anchorHeight: rectData.anchorHeight,
+            targetLabel: state.targetLabel,
+            previewLabel: `${state.targetLabel} · highlighted area`
+        });
+    }
+
+    bindReaderFileNoteHostInteractions(scope = document) {
+        scope.querySelectorAll('.reader-file-note-host').forEach(host => {
+            host.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
+            host.addEventListener('pointerdown', (event) => this.beginReaderFileHighlightSelection(event));
+            host.addEventListener('pointermove', (event) => this.updateReaderFileHighlightSelection(event));
+            host.addEventListener('pointerup', (event) => this.completeReaderFileHighlightSelection(event));
+            host.addEventListener('pointercancel', () => this.clearReaderFileHighlightSelection(true));
         });
     }
 
@@ -3918,20 +4170,22 @@ class App {
     }
 
     renderImageFileViewer(container, source, readingNotes = []) {
-        const pointNotes = readingNotes.filter(note => note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY));
+        const rectNotes = readingNotes.filter(note => this.isRectReadingNote(note));
+        const pointNotes = readingNotes.filter(note => this.isPointReadingNote(note));
 
         container.innerHTML = `
             <div class="reader-file-viewer reader-image-viewer">
                 <div class="reader-file-note-host reader-image-frame" data-note-target="Image">
                     <img src="${this.esc(source.fileDataUrl)}" alt="${this.esc(source.title)}" class="reader-image-document">
                     <div class="reader-file-note-layer">
+                        ${rectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
                         ${pointNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
                     </div>
                 </div>
             </div>
         `;
 
-        container.querySelector('.reader-file-note-host')?.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
+        this.bindReaderFileNoteHostInteractions(container);
         this.bindReaderFileNoteMarkerClicks(container);
     }
 
@@ -3955,14 +4209,16 @@ class App {
 
             const pagesMarkup = Array.from({ length: pdf.numPages }, (_, index) => {
                 const pageNumber = index + 1;
-                const pageNotes = readingNotes.filter(note => note.anchorType === 'point' && (note.pageNumber || 1) === pageNumber);
+                const pageRectNotes = readingNotes.filter(note => this.isRectReadingNote(note) && (note.pageNumber || 1) === pageNumber);
+                const pagePointNotes = readingNotes.filter(note => this.isPointReadingNote(note) && (note.pageNumber || 1) === pageNumber);
                 return `
                     <section class="reader-pdf-page">
                         <div class="reader-pdf-page-label">Page ${pageNumber}</div>
                         <div class="reader-file-note-host reader-pdf-page-stage" data-page-number="${pageNumber}" data-note-target="Page ${pageNumber}">
                             <canvas class="reader-pdf-canvas" data-page-canvas="${pageNumber}"></canvas>
                             <div class="reader-file-note-layer">
-                                ${pageNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
+                                ${pageRectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
+                                ${pagePointNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
                             </div>
                         </div>
                     </section>
@@ -3993,9 +4249,7 @@ class App {
                 await page.render({ canvasContext: context, viewport }).promise;
             }
 
-            container.querySelectorAll('.reader-file-note-host').forEach(host => {
-                host.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
-            });
+            this.bindReaderFileNoteHostInteractions(container);
             this.bindReaderFileNoteMarkerClicks(container);
         } catch (error) {
             if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {
@@ -4640,9 +4894,9 @@ class App {
         ]);
         const anchoredItemCount = items.filter(item => Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset)).length;
         const anchoredNoteCount = readingNotes.filter(note => Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)).length;
-        const pointAnchoredNoteCount = readingNotes.filter(note => note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY)).length;
+        const fileAnchoredNoteCount = readingNotes.filter(note => this.isFileRegionReadingNote(note)).length;
         const hasAnchoredAnnotations = anchoredItemCount > 0 || anchoredNoteCount > 0;
-        const hasPinnedFileNotes = pointAnchoredNoteCount > 0;
+        const hasPinnedFileNotes = fileAnchoredNoteCount > 0;
 
         this.showModal(`
             <h3>✏️ Edit Source</h3>
@@ -4701,7 +4955,7 @@ class App {
                 ` : ''}
                 ${hasPinnedFileNotes ? `
                     <div class="warning-note">
-                        Replacing the stored file will clear ${pointAnchoredNoteCount} pinned note position${pointAnchoredNoteCount === 1 ? '' : 's'} so notes do not jump to the wrong page or image area.
+                        Replacing the stored file will clear ${fileAnchoredNoteCount} saved file note area${fileAnchoredNoteCount === 1 ? '' : 's'} so notes do not jump to the wrong page or image region.
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -4743,7 +4997,7 @@ class App {
             }
 
             if (fileChanged && hasPinnedFileNotes) {
-                detachWarnings.push(`${pointAnchoredNoteCount} pinned file note${pointAnchoredNoteCount === 1 ? '' : 's'} will lose ${pointAnchoredNoteCount === 1 ? 'its' : 'their'} saved position.`);
+                detachWarnings.push(`${fileAnchoredNoteCount} file note${fileAnchoredNoteCount === 1 ? '' : 's'} will lose ${fileAnchoredNoteCount === 1 ? 'its' : 'their'} saved pinned position or highlight area.`);
             }
 
             if (detachWarnings.length > 0) {
@@ -4773,7 +5027,7 @@ class App {
             if (fileChanged && hasPinnedFileNotes) {
                 const notes = await this.db.getReadingNotesBySource(updatedSource.id);
                 for (const note of notes) {
-                    if (note.anchorType !== 'point' && !Number.isFinite(note.anchorX) && !Number.isFinite(note.anchorY) && !Number.isFinite(note.pageNumber)) {
+                    if (!this.isFileRegionReadingNote(note) && !Number.isFinite(note.pageNumber)) {
                         continue;
                     }
 
@@ -4797,7 +5051,7 @@ class App {
             } else if (contentChanged && hasAnchoredAnnotations) {
                 successMessage = 'Text updated. Inline annotations were detached to avoid drift.';
             } else if (fileChanged && hasPinnedFileNotes) {
-                successMessage = 'Stored file updated. Pinned file-note positions were detached to avoid drift.';
+                successMessage = 'Stored file updated. File-note positions and highlight areas were detached to avoid drift.';
             }
             this.showToast(successMessage, 'success');
             this.scheduleAutoBackup(contentChanged ? 'source content update' : 'source update');
@@ -4824,11 +5078,12 @@ class App {
     showAddReadingNoteModal(data) {
         if (!this.currentSource) return;
         const isPointAnchor = data.anchorType === 'point';
+        const isRectAnchor = data.anchorType === 'rect';
         const previewText = data.previewLabel || data.text || 'Pinned note';
         const locationLabel = this.getReadingNoteLocationLabel(data, this.currentSource);
 
         this.showModal(`
-            <h3>${isPointAnchor ? '📌 Add Pinned Note' : '📌 Add Reading Note'}</h3>
+            <h3>${isRectAnchor ? '🟨 Add Highlight Note' : isPointAnchor ? '📌 Add Pinned Note' : '📌 Add Reading Note'}</h3>
             <div class="selected-text-preview">${this.esc(previewText)}</div>
             <form id="reading-note-form">
                 <div class="form-group">
@@ -4904,10 +5159,7 @@ class App {
         const source = Number.isFinite(resolvedSourceId) ? await this.db.getSource(resolvedSourceId) : null;
         const colorMeta = this.getReadingNoteColorMeta(note.color);
         const canJumpToSource = !!source;
-        const canJumpToNote = !!source && (
-            (note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY))
-            || (Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset))
-        );
+        const canJumpToNote = !!source && this.canFocusReadingNote(note);
         const locationLabel = this.getReadingNoteLocationLabel(note, source);
 
         this.showModal(`
