@@ -367,17 +367,41 @@ test('file-backed sources and file-region notes round-trip through backup export
         targetLabel: 'Page 2'
     });
 
+    await db.addHighlight({
+        sourceId,
+        text: 'lesson_item1',
+        note: 'Turn this diagram into a review card',
+        category: 'vocab',
+        context: 'Page 1',
+        anchorType: 'rect',
+        pageNumber: 1,
+        anchorX: 0.24,
+        anchorY: 0.22,
+        anchorWidth: 0.19,
+        anchorHeight: 0.11,
+        targetLabel: 'Page 1'
+    });
+
     const exported = await db.exportAll();
 
     assert.equal(exported.sources[0].documentKind, 'pdf');
     assert.equal(exported.sources[0].fileName, 'lesson.pdf');
     assert.equal(exported.sources[0].fileMimeType, 'application/pdf');
     assert.equal(exported.sources[0].fileDataUrl, fileDataUrl);
+    assert.equal(exported.highlights.length, 1);
     assert.equal(exported.readingNotes.length, 2);
 
+    const exportedFileItem = exported.highlights[0];
     const exportedPointNote = exported.readingNotes.find(note => note.anchorType === 'point');
     const exportedRectNote = exported.readingNotes.find(note => note.anchorType === 'rect');
 
+    assert.equal(exportedFileItem.anchorType, 'rect');
+    assert.equal(exportedFileItem.pageNumber, 1);
+    assert.equal(exportedFileItem.anchorX, 0.24);
+    assert.equal(exportedFileItem.anchorY, 0.22);
+    assert.equal(exportedFileItem.anchorWidth, 0.19);
+    assert.equal(exportedFileItem.anchorHeight, 0.11);
+    assert.equal(exportedFileItem.targetLabel, 'Page 1');
     assert.equal(exportedPointNote.pageNumber, 1);
     assert.equal(exportedPointNote.anchorX, 0.42);
     assert.equal(exportedPointNote.anchorY, 0.31);
@@ -390,6 +414,7 @@ test('file-backed sources and file-region notes round-trip through backup export
     await db.importAll(exported, { mode: 'replace' });
 
     const [restoredSource] = await db.getAllSources();
+    const [restoredFileItem] = await db.getAllHighlights();
     const restoredNotes = await db.getAllReadingNotes();
     const restoredPointNote = restoredNotes.find(note => note.anchorType === 'point');
     const restoredRectNote = restoredNotes.find(note => note.anchorType === 'rect');
@@ -399,6 +424,13 @@ test('file-backed sources and file-region notes round-trip through backup export
     assert.equal(restoredSource.fileMimeType, 'application/pdf');
     assert.equal(restoredSource.fileSize, 18);
     assert.equal(restoredSource.fileDataUrl, fileDataUrl);
+    assert.equal(restoredFileItem.anchorType, 'rect');
+    assert.equal(restoredFileItem.pageNumber, 1);
+    assert.equal(restoredFileItem.anchorX, 0.24);
+    assert.equal(restoredFileItem.anchorY, 0.22);
+    assert.equal(restoredFileItem.anchorWidth, 0.19);
+    assert.equal(restoredFileItem.anchorHeight, 0.11);
+    assert.equal(restoredFileItem.targetLabel, 'Page 1');
     assert.equal(restoredPointNote.pageNumber, 1);
     assert.equal(restoredPointNote.anchorX, 0.42);
     assert.equal(restoredPointNote.anchorY, 0.31);

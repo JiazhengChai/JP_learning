@@ -1007,6 +1007,35 @@ class App {
         return normalized.replace(/\.[^.]+$/, '') || normalized;
     }
 
+    getSourceAnnotationBaseName(source = this.currentSource) {
+        const fileTitle = this.sourceTitleFromFileName(source?.fileName || '');
+        const sourceTitle = String(source?.title || '').trim();
+        return fileTitle || sourceTitle || 'source';
+    }
+
+    getNextAnchoredEntryTitle(kind = 'note', source = this.currentSource, entries = []) {
+        const entryKind = kind === 'item' ? 'item' : 'note';
+        const baseName = this.getSourceAnnotationBaseName(source);
+        const prefix = `${baseName}_${entryKind}`;
+        const lowerPrefix = prefix.toLowerCase();
+        let maxIndex = 0;
+
+        entries.forEach(entry => {
+            const text = String(entry?.text || '').trim();
+            if (!text) return;
+
+            const lowerText = text.toLowerCase();
+            if (!lowerText.startsWith(lowerPrefix)) return;
+
+            const suffix = text.slice(prefix.length).trim();
+            if (!/^\d+$/.test(suffix)) return;
+
+            maxIndex = Math.max(maxIndex, Number.parseInt(suffix, 10) || 0);
+        });
+
+        return `${prefix}${maxIndex + 1}`;
+    }
+
     normalizeSourceStoredFileData(source = {}) {
         const fileDataUrl = String(source.fileDataUrl || '').trim();
         return {
@@ -3509,7 +3538,7 @@ class App {
 
         let selector = '';
         if (Number.isFinite(target.highlightId)) {
-            selector = `.hl[data-hl-id="${target.highlightId}"]`;
+            selector = `.reader-file-item-box[data-hl-id="${target.highlightId}"], .reader-file-item-marker[data-hl-id="${target.highlightId}"], .hl[data-hl-id="${target.highlightId}"]`;
         } else if (Number.isFinite(target.noteId)) {
             selector = `.reader-file-note-box[data-note-id="${target.noteId}"], .reader-file-note-marker[data-note-id="${target.noteId}"], .hl-reading-note[data-note-id="${target.noteId}"]`;
         }
@@ -3568,7 +3597,15 @@ class App {
         ]);
         const usesFileViewer = this.sourceUsesFileViewer(source);
         const view = document.getElementById('view-reader');
-        const sortedItems = [...items].sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0));
+        const sortedItems = [...items].sort((a, b) => {
+            const left = this.isFileRegionHighlight(a)
+                ? ((a.pageNumber || 0) * 1000000) + Math.round((a.anchorY || 0) * 1000)
+                : (a.startOffset || 0);
+            const right = this.isFileRegionHighlight(b)
+                ? ((b.pageNumber || 0) * 1000000) + Math.round((b.anchorY || 0) * 1000)
+                : (b.startOffset || 0);
+            return left - right;
+        });
         const sortedReadingNotes = [...readingNotes].sort((a, b) => {
             const left = this.isFileRegionReadingNote(a)
                 ? ((a.pageNumber || 0) * 1000000) + Math.round((a.anchorY || 0) * 1000)
@@ -3636,7 +3673,8 @@ class App {
                     <div id="reader-hl-list">
                         ${items.length === 0 ? '<p style="color:var(--text-muted);font-size:0.82rem;">Select text, then save it as a study item.</p>' : ''}
                         ${sortedItems.map(item => {
-                            const canJump = Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset);
+                            const canJump = this.canFocusHighlight(item);
+                            const locationLabel = this.getHighlightLocationLabel(item, source);
                             return `
                             <div class="hl-list-item" data-hl-id="${item.id}" title="${canJump ? 'Jump to this item in the article' : 'Open item details'}">
                                 <div class="hl-text">
@@ -3644,6 +3682,7 @@ class App {
                                     ${this.esc(item.text)}
                                 </div>
                                 <div class="hl-meta-line">${this.esc(item.category || 'General')} · ${item.charCount || item.text.length} chars</div>
+                                ${locationLabel ? `<div class="hl-meta-line">${this.esc(locationLabel)}</div>` : ''}
                                 ${item.note ? `<div class="hl-note note-text">${this.esc(item.note)}</div>` : ''}
                             </div>
                         `;
@@ -3678,7 +3717,7 @@ class App {
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
         view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
             const targetElement = e.target instanceof Element ? e.target : e.target?.parentElement;
-            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) return;
+            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id], .reader-file-item-marker[data-hl-id], .reader-file-item-box[data-hl-id]')) return;
 
             this.hideSelectionToolbar();
             window.getSelection()?.removeAllRanges();
@@ -3692,7 +3731,7 @@ class App {
             item.addEventListener('click', async () => {
                 const hlId = parseInt(item.dataset.hlId, 10);
                 const highlight = items.find(entry => entry.id === hlId);
-                if (Number.isFinite(highlight?.startOffset) && Number.isFinite(highlight?.endOffset)) {
+                if (this.canFocusHighlight(highlight)) {
                     await this.openReader(source.id, { highlightId: hlId });
                     return;
                 }
@@ -3730,7 +3769,7 @@ class App {
         this.clearReaderFileHighlightSelection(true);
 
         if (usesFileViewer) {
-            await this.renderStoredFileViewer(source, readingNotes);
+            await this.renderStoredFileViewer(source, readingNotes, items);
             document.getElementById('reader-add-file-note')?.addEventListener('click', () => this.toggleReaderFileNoteMode('point'));
             document.getElementById('reader-draw-file-highlight')?.addEventListener('click', () => this.toggleReaderFileNoteMode('rect'));
             this.updateReaderFileNoteModeUi();
@@ -3790,11 +3829,71 @@ class App {
         if (!note) return '';
 
         if (note.anchorType === 'point' || note.anchorType === 'rect') {
-            return this.getReadingNoteLocationLabel(note, source) || 'Pinned note';
+            const title = String(note.text || '').trim();
+            return title || this.getReadingNoteLocationLabel(note, source) || 'Pinned note';
         }
 
         const text = String(note.text || '').trim();
         return `${text.substring(0, 40)}${text.length > 40 ? '…' : ''}`;
+    }
+
+    isPointHighlight(item) {
+        return item?.anchorType === 'point'
+            && Number.isFinite(item.anchorX)
+            && Number.isFinite(item.anchorY);
+    }
+
+    isRectHighlight(item) {
+        return item?.anchorType === 'rect'
+            && Number.isFinite(item.anchorX)
+            && Number.isFinite(item.anchorY)
+            && Number.isFinite(item.anchorWidth)
+            && Number.isFinite(item.anchorHeight);
+    }
+
+    isFileRegionHighlight(item) {
+        return this.isPointHighlight(item) || this.isRectHighlight(item);
+    }
+
+    canFocusHighlight(item) {
+        return this.isFileRegionHighlight(item)
+            || (Number.isFinite(item?.startOffset) && Number.isFinite(item?.endOffset));
+    }
+
+    getHighlightLocationLabel(item, source = this.currentSource) {
+        if (!item) return '';
+
+        if (item.anchorType === 'point') {
+            if (String(item.targetLabel || '').trim()) {
+                return String(item.targetLabel || '').trim();
+            }
+            if (Number.isFinite(item.pageNumber)) {
+                return `Page ${item.pageNumber}`;
+            }
+            if (source?.documentKind === 'image') {
+                return 'Image pin';
+            }
+            return 'Pinned file item';
+        }
+
+        if (item.anchorType === 'rect') {
+            if (String(item.targetLabel || '').trim()) {
+                return `${String(item.targetLabel || '').trim()} highlight`;
+            }
+            if (Number.isFinite(item.pageNumber)) {
+                return `Page ${item.pageNumber} highlight`;
+            }
+            if (source?.documentKind === 'image') {
+                return 'Image highlight';
+            }
+            return 'Highlighted file area';
+        }
+
+        if (Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset)) {
+            return 'Text selection';
+        }
+
+        return '';
     }
 
     isPointReadingNote(note) {
@@ -3880,7 +3979,7 @@ class App {
         const colorMeta = this.getReadingNoteColorMeta(note.color || 'yellow');
         const anchorX = this.clampNumber(note.anchorX, 0.02, 0.98);
         const anchorY = this.clampNumber(note.anchorY, 0.02, 0.98);
-        const title = `${this.getReadingNoteLocationLabel(note, this.currentSource) || 'Pinned note'} — ${note.note || ''}`.trim();
+        const title = `${this.getReadingNoteDisplayText(note, this.currentSource) || 'Pinned note'} — ${note.note || ''}`.trim();
 
         return `
             <button
@@ -3895,7 +3994,7 @@ class App {
 
     renderReaderFileNoteBox(note, options = {}) {
         const colorMeta = this.getReadingNoteColorMeta(note.color || 'yellow');
-        const title = `${this.getReadingNoteLocationLabel(note, this.currentSource) || 'Highlight note'} — ${note.note || ''}`.trim();
+        const title = `${this.getReadingNoteDisplayText(note, this.currentSource) || 'Highlight note'} — ${note.note || ''}`.trim();
         const noteId = Number.isFinite(note.id) ? ` data-note-id="${note.id}"` : '';
         const extraClass = options.preview ? ' reader-file-note-preview' : '';
         const style = this.getReaderFileRectStyle(note);
@@ -3912,11 +4011,51 @@ class App {
         `;
     }
 
+    renderReaderFileItemMarker(item) {
+        const anchorX = this.clampNumber(item.anchorX, 0.02, 0.98);
+        const anchorY = this.clampNumber(item.anchorY, 0.02, 0.98);
+        const title = `${String(item.text || '').trim() || 'Pinned item'} — ${item.note || ''}`.trim();
+
+        return `
+            <button
+                type="button"
+                class="reader-file-item-marker"
+                data-hl-id="${item.id}"
+                style="left:${(anchorX * 100).toFixed(2)}%;top:${(anchorY * 100).toFixed(2)}%;"
+                title="${this.esc(title)}"
+            >📝</button>
+        `;
+    }
+
+    renderReaderFileItemBox(item) {
+        const title = `${String(item.text || '').trim() || 'Study item'} — ${item.note || ''}`.trim();
+        const style = this.getReaderFileRectStyle(item);
+
+        return `
+            <button
+                type="button"
+                class="reader-file-item-box"
+                data-hl-id="${item.id}"
+                style="${style}"
+                title="${this.esc(title)}"
+            ></button>
+        `;
+    }
+
     bindReaderFileNoteMarkerClicks(scope = document) {
         scope.querySelectorAll('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]').forEach(marker => {
             marker.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.showReadingNoteDetail(parseInt(marker.dataset.noteId, 10), this.currentSource?.id);
+            });
+        });
+    }
+
+    bindReaderFileItemMarkerClicks(scope = document) {
+        scope.querySelectorAll('.reader-file-item-marker[data-hl-id], .reader-file-item-box[data-hl-id]').forEach(marker => {
+            marker.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showHighlightDetailModal(parseInt(marker.dataset.hlId, 10));
             });
         });
     }
@@ -3986,7 +4125,7 @@ class App {
 
     handleReaderFilePlacement(event) {
         if (!this.currentSource || this.readerFileNoteMode !== 'point') return;
-        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) {
+        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id], .reader-file-item-marker[data-hl-id], .reader-file-item-box[data-hl-id]')) {
             return;
         }
 
@@ -4020,7 +4159,7 @@ class App {
     beginReaderFileHighlightSelection(event) {
         if (!this.currentSource || this.readerFileNoteMode !== 'rect') return;
         if (event.button !== 0) return;
-        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]')) {
+        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id], .reader-file-item-marker[data-hl-id], .reader-file-item-box[data-hl-id]')) {
             return;
         }
 
@@ -4152,33 +4291,37 @@ class App {
         });
     }
 
-    async renderStoredFileViewer(source, readingNotes = []) {
+    async renderStoredFileViewer(source, readingNotes = [], items = []) {
         const container = document.getElementById('reader-content');
         if (!container) return;
 
         if (source.documentKind === 'image') {
-            this.renderImageFileViewer(container, source, readingNotes);
+            this.renderImageFileViewer(container, source, readingNotes, items);
             return;
         }
 
         if (source.documentKind === 'pdf') {
-            await this.renderPdfFileViewer(container, source, readingNotes);
+            await this.renderPdfFileViewer(container, source, readingNotes, items);
             return;
         }
 
         this.renderGenericFileViewer(container, source);
     }
 
-    renderImageFileViewer(container, source, readingNotes = []) {
+    renderImageFileViewer(container, source, readingNotes = [], items = []) {
         const rectNotes = readingNotes.filter(note => this.isRectReadingNote(note));
         const pointNotes = readingNotes.filter(note => this.isPointReadingNote(note));
+        const rectItems = items.filter(item => this.isRectHighlight(item));
+        const pointItems = items.filter(item => this.isPointHighlight(item));
 
         container.innerHTML = `
             <div class="reader-file-viewer reader-image-viewer">
                 <div class="reader-file-note-host reader-image-frame" data-note-target="Image">
                     <img src="${this.esc(source.fileDataUrl)}" alt="${this.esc(source.title)}" class="reader-image-document">
                     <div class="reader-file-note-layer">
+                        ${rectItems.map(item => this.renderReaderFileItemBox(item)).join('')}
                         ${rectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
+                        ${pointItems.map(item => this.renderReaderFileItemMarker(item)).join('')}
                         ${pointNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
                     </div>
                 </div>
@@ -4186,10 +4329,11 @@ class App {
         `;
 
         this.bindReaderFileNoteHostInteractions(container);
+        this.bindReaderFileItemMarkerClicks(container);
         this.bindReaderFileNoteMarkerClicks(container);
     }
 
-    async renderPdfFileViewer(container, source, readingNotes = []) {
+    async renderPdfFileViewer(container, source, readingNotes = [], items = []) {
         const renderToken = ++this._fileRenderToken;
 
         if (typeof pdfjsLib === 'undefined') {
@@ -4211,13 +4355,17 @@ class App {
                 const pageNumber = index + 1;
                 const pageRectNotes = readingNotes.filter(note => this.isRectReadingNote(note) && (note.pageNumber || 1) === pageNumber);
                 const pagePointNotes = readingNotes.filter(note => this.isPointReadingNote(note) && (note.pageNumber || 1) === pageNumber);
+                const pageRectItems = items.filter(item => this.isRectHighlight(item) && (item.pageNumber || 1) === pageNumber);
+                const pagePointItems = items.filter(item => this.isPointHighlight(item) && (item.pageNumber || 1) === pageNumber);
                 return `
                     <section class="reader-pdf-page">
                         <div class="reader-pdf-page-label">Page ${pageNumber}</div>
                         <div class="reader-file-note-host reader-pdf-page-stage" data-page-number="${pageNumber}" data-note-target="Page ${pageNumber}">
                             <canvas class="reader-pdf-canvas" data-page-canvas="${pageNumber}"></canvas>
                             <div class="reader-file-note-layer">
+                                ${pageRectItems.map(item => this.renderReaderFileItemBox(item)).join('')}
                                 ${pageRectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
+                                ${pagePointItems.map(item => this.renderReaderFileItemMarker(item)).join('')}
                                 ${pagePointNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
                             </div>
                         </div>
@@ -4250,6 +4398,7 @@ class App {
             }
 
             this.bindReaderFileNoteHostInteractions(container);
+            this.bindReaderFileItemMarkerClicks(container);
             this.bindReaderFileNoteMarkerClicks(container);
         } catch (error) {
             if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {
@@ -4789,7 +4938,8 @@ class App {
         if (!item) return;
         const source = item.sourceId ? await this.db.getSource(item.sourceId) : null;
         const canJumpToSource = !!source;
-        const canJumpToItem = Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset);
+        const canJumpToItem = this.canFocusHighlight(item);
+        const locationLabel = this.getHighlightLocationLabel(item, source);
 
         this.showModal(`
             <h3>📝 Study Item</h3>
@@ -4802,6 +4952,7 @@ class App {
                 <div><strong>Reviews:</strong> ${item.reviewCount || 0} · ${this.masteryName(item.masteryLevel || 0)}</div>
                 ${item.nextReviewAt ? `<div><strong>Next review:</strong> ${this.relativeTime(item.nextReviewAt)}</div>` : ''}
                 ${source ? `<div><strong>Source:</strong> ${this.esc(source.title)}</div>` : '<div><strong>Source:</strong> Manual</div>'}
+                ${locationLabel ? `<div><strong>Location:</strong> ${this.esc(locationLabel)}</div>` : ''}
                 ${item.context ? `<div><strong>Context:</strong> <span class="detail-context">${this.esc(item.context)}</span></div>` : ''}
             </div>
             <div class="form-actions">
@@ -4894,9 +5045,17 @@ class App {
         ]);
         const anchoredItemCount = items.filter(item => Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset)).length;
         const anchoredNoteCount = readingNotes.filter(note => Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)).length;
+        const fileAnchoredItemCount = items.filter(item => this.isFileRegionHighlight(item)).length;
         const fileAnchoredNoteCount = readingNotes.filter(note => this.isFileRegionReadingNote(note)).length;
         const hasAnchoredAnnotations = anchoredItemCount > 0 || anchoredNoteCount > 0;
-        const hasPinnedFileNotes = fileAnchoredNoteCount > 0;
+        const hasPinnedFileAnchors = fileAnchoredItemCount > 0 || fileAnchoredNoteCount > 0;
+        const fileAnchorWarningLabels = [];
+        if (fileAnchoredItemCount > 0) {
+            fileAnchorWarningLabels.push(`${fileAnchoredItemCount} saved file item area${fileAnchoredItemCount === 1 ? '' : 's'}`);
+        }
+        if (fileAnchoredNoteCount > 0) {
+            fileAnchorWarningLabels.push(`${fileAnchoredNoteCount} saved file note area${fileAnchoredNoteCount === 1 ? '' : 's'}`);
+        }
 
         this.showModal(`
             <h3>✏️ Edit Source</h3>
@@ -4953,9 +5112,9 @@ class App {
                         Editing the article body will clear ${anchoredItemCount} inline item position${anchoredItemCount === 1 ? '' : 's'} and ${anchoredNoteCount} note position${anchoredNoteCount === 1 ? '' : 's'} so saved annotations do not drift to the wrong text.
                     </div>
                 ` : ''}
-                ${hasPinnedFileNotes ? `
+                ${hasPinnedFileAnchors ? `
                     <div class="warning-note">
-                        Replacing the stored file will clear ${fileAnchoredNoteCount} saved file note area${fileAnchoredNoteCount === 1 ? '' : 's'} so notes do not jump to the wrong page or image region.
+                        Replacing the stored file will clear ${this.esc(fileAnchorWarningLabels.join(' and '))} so anchored annotations do not jump to the wrong page or image region.
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -4996,8 +5155,15 @@ class App {
                 detachWarnings.push(`${itemLabel} and ${noteLabel} will stay in the library, but their inline text positions will be cleared.`);
             }
 
-            if (fileChanged && hasPinnedFileNotes) {
-                detachWarnings.push(`${fileAnchoredNoteCount} file note${fileAnchoredNoteCount === 1 ? '' : 's'} will lose ${fileAnchoredNoteCount === 1 ? 'its' : 'their'} saved pinned position or highlight area.`);
+            if (fileChanged && hasPinnedFileAnchors) {
+                const anchorLabels = [];
+                if (fileAnchoredItemCount > 0) {
+                    anchorLabels.push(`${fileAnchoredItemCount} file item${fileAnchoredItemCount === 1 ? '' : 's'}`);
+                }
+                if (fileAnchoredNoteCount > 0) {
+                    anchorLabels.push(`${fileAnchoredNoteCount} file note${fileAnchoredNoteCount === 1 ? '' : 's'}`);
+                }
+                detachWarnings.push(`${anchorLabels.join(' and ')} will lose their saved pinned position or highlight area.`);
             }
 
             if (detachWarnings.length > 0) {
@@ -5024,7 +5190,25 @@ class App {
             if (contentChanged && hasAnchoredAnnotations) {
                 await this.db.clearSourceAnnotationOffsets(updatedSource.id);
             }
-            if (fileChanged && hasPinnedFileNotes) {
+            if (fileChanged && hasPinnedFileAnchors) {
+                const highlights = await this.db.getHighlightsBySource(updatedSource.id);
+                for (const item of highlights) {
+                    if (!this.isFileRegionHighlight(item) && !Number.isFinite(item.pageNumber)) {
+                        continue;
+                    }
+
+                    await this.db.updateHighlight({
+                        ...item,
+                        anchorType: '',
+                        pageNumber: null,
+                        anchorX: null,
+                        anchorY: null,
+                        anchorWidth: null,
+                        anchorHeight: null,
+                        targetLabel: ''
+                    });
+                }
+
                 const notes = await this.db.getReadingNotesBySource(updatedSource.id);
                 for (const note of notes) {
                     if (!this.isFileRegionReadingNote(note) && !Number.isFinite(note.pageNumber)) {
@@ -5046,12 +5230,12 @@ class App {
 
             this.closeModal();
             let successMessage = 'Source updated!';
-            if (contentChanged && hasAnchoredAnnotations && fileChanged && hasPinnedFileNotes) {
-                successMessage = 'Source updated. Text anchors and pinned file notes were detached to avoid drift.';
+            if (contentChanged && hasAnchoredAnnotations && fileChanged && hasPinnedFileAnchors) {
+                successMessage = 'Source updated. Text anchors and file annotation anchors were detached to avoid drift.';
             } else if (contentChanged && hasAnchoredAnnotations) {
                 successMessage = 'Text updated. Inline annotations were detached to avoid drift.';
-            } else if (fileChanged && hasPinnedFileNotes) {
-                successMessage = 'Stored file updated. File-note positions and highlight areas were detached to avoid drift.';
+            } else if (fileChanged && hasPinnedFileAnchors) {
+                successMessage = 'Stored file updated. File annotation positions and highlight areas were detached to avoid drift.';
             }
             this.showToast(successMessage, 'success');
             this.scheduleAutoBackup(contentChanged ? 'source content update' : 'source update');
@@ -5075,8 +5259,204 @@ class App {
         });
     }
 
+    async showAnchoredFileEntryModal(data) {
+        if (!this.currentSource) return;
+
+        const source = this.currentSource;
+        const previewText = data.previewLabel || this.getReadingNoteLocationLabel(data, source) || 'Pinned note';
+        const locationLabel = this.getReadingNoteLocationLabel(data, source);
+        const suggestedCategory = this.getReviewPrimaryCategory() || 'vocab';
+        const [existingItems, existingNotes, categoryMarkup] = await Promise.all([
+            this.db.getHighlightsBySource(source.id),
+            this.db.getReadingNotesBySource(source.id),
+            this.buildCategoryMarkup(suggestedCategory)
+        ]);
+        const defaultTitles = {
+            note: this.getNextAnchoredEntryTitle('note', source, existingNotes),
+            item: this.getNextAnchoredEntryTitle('item', source, existingItems)
+        };
+        const defaultSaveKind = data.saveKind === 'item' ? 'item' : 'note';
+
+        this.showModal(`
+            <h3>${data.anchorType === 'rect' ? '🟨 Save Highlight Area' : '📌 Save Pinned Annotation'}</h3>
+            <div class="selected-text-preview">${this.esc(previewText)}</div>
+            <form id="anchored-entry-form">
+                <div class="form-group">
+                    <label>Save As</label>
+                    <div class="category-chip-row" id="anchored-entry-kind-row">
+                        <button type="button" class="category-chip${defaultSaveKind === 'note' ? ' active' : ''}" data-save-kind="note">📌 Note</button>
+                        <button type="button" class="category-chip${defaultSaveKind === 'item' ? ' active' : ''}" data-save-kind="item">📝 Item</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="anchored-entry-title" value="${this.esc(defaultTitles[defaultSaveKind])}" placeholder="Add a title" required>
+                </div>
+                <div class="form-group">
+                    <label>Note</label>
+                    <textarea id="anchored-entry-content" rows="4" placeholder="Write your thought, question, or observation..."></textarea>
+                </div>
+                <div class="item-meta-panel">
+                    <div><strong>Source:</strong> ${this.esc(source.title)}</div>
+                    ${locationLabel ? `<div><strong>Location:</strong> ${this.esc(locationLabel)}</div>` : ''}
+                </div>
+                <div class="form-group" id="anchored-note-color-group">
+                    <label>Color</label>
+                    <div class="category-chip-row">
+                        ${this.renderReadingNoteColorChips(data.color || 'yellow')}
+                    </div>
+                </div>
+                <div class="form-group" id="anchored-item-category-group" ${defaultSaveKind === 'item' ? '' : 'hidden'}>
+                    <label>Category <span class="form-hint">optional quick grouping</span></label>
+                    <div class="category-chip-row">${categoryMarkup}</div>
+                    <div class="inline-input-row">
+                        <input type="text" id="anchored-item-new-category" placeholder="New category name">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="anchored-entry-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="anchored-entry-submit">${defaultSaveKind === 'item' ? '💾 Save Item' : '📌 Save Note'}</button>
+                </div>
+            </form>
+        `);
+
+        this.bindReadingNoteColorChips('#anchored-entry-form');
+
+        const form = document.getElementById('anchored-entry-form');
+        const titleInput = document.getElementById('anchored-entry-title');
+        const noteColorGroup = document.getElementById('anchored-note-color-group');
+        const itemCategoryGroup = document.getElementById('anchored-item-category-group');
+        const submitButton = document.getElementById('anchored-entry-submit');
+        const saveKindChips = [...document.querySelectorAll('#anchored-entry-kind-row .category-chip[data-save-kind]')];
+        const categoryChips = [...document.querySelectorAll('#anchored-item-category-group .category-chip[data-category]')];
+        const customCategoryInput = document.getElementById('anchored-item-new-category');
+        let saveKind = defaultSaveKind;
+        let lastAutoTitle = defaultTitles[saveKind];
+
+        const updateSaveKindUi = (nextKind) => {
+            const previousAutoTitle = lastAutoTitle;
+            saveKind = nextKind === 'item' ? 'item' : 'note';
+            lastAutoTitle = defaultTitles[saveKind];
+
+            saveKindChips.forEach(chip => {
+                chip.classList.toggle('active', chip.dataset.saveKind === saveKind);
+            });
+
+            if (noteColorGroup) noteColorGroup.hidden = saveKind !== 'note';
+            if (itemCategoryGroup) itemCategoryGroup.hidden = saveKind !== 'item';
+            if (submitButton) {
+                submitButton.textContent = saveKind === 'item' ? '💾 Save Item' : '📌 Save Note';
+            }
+
+            if (titleInput && (!titleInput.value.trim() || titleInput.value.trim() === previousAutoTitle)) {
+                titleInput.value = lastAutoTitle;
+            }
+        };
+
+        categoryChips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                categoryChips.forEach(node => node.classList.remove('active'));
+                chip.classList.add('active');
+                if (customCategoryInput) {
+                    customCategoryInput.value = '';
+                }
+            });
+        });
+
+        saveKindChips.forEach(chip => {
+            chip.addEventListener('click', () => updateSaveKindUi(chip.dataset.saveKind));
+        });
+
+        this.bindEnterToSubmit(form);
+        document.getElementById('anchored-entry-cancel').addEventListener('click', () => this.closeModal());
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const title = titleInput?.value.trim() || '';
+            const content = document.getElementById('anchored-entry-content').value.trim();
+            if (!title) return;
+
+            const preservedReaderScrollTop = this.currentView === 'reader'
+                ? document.getElementById('main')?.scrollTop ?? 0
+                : null;
+
+            let focusTarget = null;
+            let toastMessage = '';
+            let backupReason = '';
+
+            if (saveKind === 'item') {
+                const activeCategory = document.querySelector('#anchored-item-category-group .category-chip.active')?.dataset.category || suggestedCategory;
+                const customCategory = customCategoryInput?.value.trim() || '';
+                const category = customCategory || activeCategory || 'vocab';
+                const highlightId = await this.db.addHighlight({
+                    sourceId: source.id,
+                    text: title,
+                    note: content,
+                    category,
+                    context: locationLabel || data.targetLabel || '',
+                    anchorType: data.anchorType || '',
+                    startOffset: data.startOffset,
+                    endOffset: data.endOffset,
+                    pageNumber: data.pageNumber,
+                    anchorX: data.anchorX,
+                    anchorY: data.anchorY,
+                    anchorWidth: data.anchorWidth,
+                    anchorHeight: data.anchorHeight,
+                    targetLabel: data.targetLabel || ''
+                });
+                focusTarget = { highlightId };
+                toastMessage = 'Item saved!';
+                backupReason = 'item add';
+            } else {
+                const color = document.querySelector('#anchored-note-color-group .category-chip.active')?.dataset.color || 'yellow';
+                const noteId = await this.db.addReadingNote({
+                    sourceId: source.id,
+                    text: title,
+                    note: content,
+                    color,
+                    anchorType: data.anchorType || '',
+                    startOffset: data.startOffset,
+                    endOffset: data.endOffset,
+                    pageNumber: data.pageNumber,
+                    anchorX: data.anchorX,
+                    anchorY: data.anchorY,
+                    anchorWidth: data.anchorWidth,
+                    anchorHeight: data.anchorHeight,
+                    targetLabel: data.targetLabel || ''
+                });
+                focusTarget = { noteId };
+                toastMessage = 'Reading note saved!';
+                backupReason = 'reading note add';
+            }
+
+            this.closeModal();
+            this.showToast(toastMessage, 'success');
+            window.getSelection().removeAllRanges();
+            this.scheduleAutoBackup(backupReason);
+            await this.renderReader();
+
+            const main = document.getElementById('main');
+            if (main && Number.isFinite(preservedReaderScrollTop)) {
+                main.scrollTop = preservedReaderScrollTop;
+            }
+
+            if (saveKind === 'item') {
+                await this.updateReviewBadge();
+            }
+
+            this.focusReaderTarget(focusTarget);
+        });
+
+        updateSaveKindUi(defaultSaveKind);
+    }
+
     showAddReadingNoteModal(data) {
         if (!this.currentSource) return;
+        if (data?.anchorType === 'point' || data?.anchorType === 'rect') {
+            void this.showAnchoredFileEntryModal(data);
+            return;
+        }
+
         const isPointAnchor = data.anchorType === 'point';
         const isRectAnchor = data.anchorType === 'rect';
         const previewText = data.previewLabel || data.text || 'Pinned note';
