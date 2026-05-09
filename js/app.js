@@ -50,6 +50,8 @@ class App {
         this._libraryCardClickTimer = null;
         this._readerJumpTimer = null;
         this._readerJumpTarget = null;
+        this._fileRenderToken = 0;
+        this.readerFileNoteMode = false;
         this.migrationNotice = null;
     }
 
@@ -924,6 +926,122 @@ class App {
         return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name || '');
     }
 
+    isPdfFile(file) {
+        if (!file) return false;
+        return String(file.type || '').includes('pdf') || /\.pdf$/i.test(file.name || '');
+    }
+
+    getFileExtension(fileName = '') {
+        const normalized = String(fileName || '').trim();
+        const index = normalized.lastIndexOf('.');
+        return index >= 0 ? normalized.substring(index).toLowerCase() : '';
+    }
+
+    isTextLikeFile(file) {
+        if (!file) return false;
+
+        if (String(file.type || '').startsWith('text/')) {
+            return true;
+        }
+
+        return ['.txt', '.md', '.csv', '.srt', '.vtt', '.html', '.htm', '.xml', '.json', '.log', '.tsv'].includes(this.getFileExtension(file.name));
+    }
+
+    sourceHasStoredFile(source = {}) {
+        return !!String(source.fileDataUrl || '').trim();
+    }
+
+    sourceUsesFileViewer(source = {}) {
+        if (!this.sourceHasStoredFile(source)) return false;
+        const documentKind = String(source.documentKind || '').trim() || 'text';
+        return documentKind !== 'text';
+    }
+
+    sourceSupportsPinnedNotes(source = {}) {
+        const documentKind = String(source.documentKind || '').trim() || 'text';
+        return this.sourceHasStoredFile(source) && (documentKind === 'image' || documentKind === 'pdf');
+    }
+
+    getDefaultSourceTypeForDocumentKind(documentKind = 'text') {
+        return documentKind === 'image' || documentKind === 'file' ? 'other' : 'article';
+    }
+
+    getSourceDocumentKindLabel(documentKind = 'text') {
+        const normalized = String(documentKind || 'text').trim() || 'text';
+
+        if (normalized === 'image') return 'Image';
+        if (normalized === 'pdf') return 'PDF';
+        if (normalized === 'file') return 'File';
+        return 'Text';
+    }
+
+    sourceTitleFromFileName(fileName = '') {
+        const normalized = String(fileName || '').trim();
+        if (!normalized) return '';
+        return normalized.replace(/\.[^.]+$/, '') || normalized;
+    }
+
+    normalizeSourceStoredFileData(source = {}) {
+        const fileDataUrl = String(source.fileDataUrl || '').trim();
+        return {
+            documentKind: String(source.documentKind || (fileDataUrl ? 'file' : 'text')).trim() || 'text',
+            fileName: String(source.fileName || '').trim(),
+            fileMimeType: String(source.fileMimeType || '').trim(),
+            fileSize: Number.isFinite(source.fileSize) ? source.fileSize : 0,
+            fileDataUrl
+        };
+    }
+
+    getSourcePreviewText(source = {}) {
+        const previewText = String(source.content || '').replace(/\s+/g, ' ').trim();
+        if (previewText) {
+            return previewText.substring(0, 200);
+        }
+
+        if (this.sourceHasStoredFile(source)) {
+            const fileLabel = String(source.fileName || source.fileMimeType || this.getSourceDocumentKindLabel(source.documentKind)).trim();
+            const sizeLabel = Number.isFinite(source.fileSize) && source.fileSize > 0
+                ? ` · ${this.formatBytes(source.fileSize)}`
+                : '';
+            return `${this.getSourceDocumentKindLabel(source.documentKind)} stored locally · ${fileLabel}${sizeLabel}`;
+        }
+
+        return '—';
+    }
+
+    updateSourceStoredFileSummary(source = {}) {
+        const summary = document.getElementById('src-stored-file');
+        if (!summary) return;
+
+        if (!this.sourceHasStoredFile(source)) {
+            summary.innerHTML = '';
+            summary.classList.add('hidden');
+            return;
+        }
+
+        const documentKindLabel = this.getSourceDocumentKindLabel(source.documentKind);
+        const fileName = String(source.fileName || '').trim() || `${documentKindLabel} upload`;
+        const mimeType = String(source.fileMimeType || '').trim() || 'application/octet-stream';
+        const sizeLabel = Number.isFinite(source.fileSize) && source.fileSize > 0
+            ? this.formatBytes(source.fileSize)
+            : 'Unknown size';
+        const viewerHint = source.documentKind === 'pdf'
+            ? 'PDF pages can be annotated with pinned notes.'
+            : source.documentKind === 'image'
+                ? 'Image notes stay attached to the same visual spot.'
+                : 'This file is stored locally and included in JSON backups.';
+        const extractedText = String(source.content || '').trim();
+
+        summary.innerHTML = `
+            <div><strong>Stored file:</strong> ${this.esc(fileName)}</div>
+            <div><strong>Kind:</strong> ${this.esc(documentKindLabel)} · ${this.esc(mimeType)}</div>
+            <div><strong>Size:</strong> ${this.esc(sizeLabel)}</div>
+            ${extractedText ? `<div><strong>Extracted text:</strong> ${extractedText.length.toLocaleString()} characters</div>` : ''}
+            <div>${this.esc(viewerHint)}</div>
+        `;
+        summary.classList.remove('hidden');
+    }
+
     readFileAsDataUrl(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -1002,76 +1120,120 @@ class App {
     }
 
     async extractSourceDataFromFile(file) {
-        const name = file.name.toLowerCase();
-        const ext = name.substring(name.lastIndexOf('.'));
+        const ext = this.getFileExtension(file.name);
+        const fileDataUrl = await this.readFileAsDataUrl(file);
+        const documentKind = this.isImageFile(file)
+            ? 'image'
+            : this.isPdfFile(file)
+                ? 'pdf'
+                : this.isTextLikeFile(file)
+                    ? 'text'
+                    : 'file';
+        const baseResult = {
+            content: '',
+            imageUrl: '',
+            documentKind,
+            fileName: String(file.name || '').trim(),
+            fileMimeType: String(file.type || '').trim() || (documentKind === 'pdf'
+                ? 'application/pdf'
+                : documentKind === 'image'
+                    ? 'image/*'
+                    : 'application/octet-stream'),
+            fileSize: Number.isFinite(file.size) ? file.size : 0,
+            fileDataUrl,
+            extractionError: ''
+        };
 
-        if (ext === '.txt' || ext === '.md' || ext === '.csv' || ext === '.srt' || ext === '.vtt') {
+        if (documentKind === 'image') {
             return {
-                content: await file.text(),
-                imageUrl: ''
+                ...baseResult,
+                imageUrl: fileDataUrl
             };
         }
 
-        if (ext === '.html' || ext === '.htm' || ext === '.xml') {
-            const raw = await file.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(raw, ext === '.xml' ? 'text/xml' : 'text/html');
-            const imageUrl = this.extractSourceImageFromDocument(doc);
-            doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-
-            return {
-                content: (doc.body || doc.documentElement).textContent.replace(/\n{3,}/g, '\n\n').trim(),
-                imageUrl
-            };
-        }
-
-        if (ext === '.json') {
-            const raw = await file.text();
-            try {
-                const data = JSON.parse(raw);
-                return {
-                    content: typeof data === 'string' ? data : JSON.stringify(data, null, 2),
-                    imageUrl: ''
-                };
-            } catch {
-                return {
-                    content: raw,
-                    imageUrl: ''
-                };
-            }
-        }
-
-        if (ext === '.pdf') {
+        if (documentKind === 'pdf') {
             if (typeof pdfjsLib === 'undefined') {
-                throw new Error('PDF.js library not loaded. Please refresh and try again.');
+                return {
+                    ...baseResult,
+                    extractionError: 'PDF text extraction is unavailable right now, but the PDF was still stored locally.'
+                };
             }
 
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            const pages = [];
+            try {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                const pages = [];
 
-            for (let i = 1; i <= pdf.numPages; i++) {
-                const page = await pdf.getPage(i);
-                const textContent = await page.getTextContent();
-                const pageText = this.extractPdfPageText(textContent);
-                if (pageText.trim()) pages.push(pageText.trim());
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const pageText = this.extractPdfPageText(textContent);
+                    if (pageText.trim()) pages.push(pageText.trim());
+                }
+
+                return {
+                    ...baseResult,
+                    content: pages.join('\n\n'),
+                    extractionError: pages.length === 0 ? 'No selectable text was found in this PDF, but the file was still stored locally.' : ''
+                };
+            } catch (error) {
+                return {
+                    ...baseResult,
+                    extractionError: error.message || 'Unable to extract PDF text, but the file was still stored locally.'
+                };
+            }
+        }
+
+        if (documentKind === 'text') {
+            if (ext === '.html' || ext === '.htm' || ext === '.xml') {
+                const raw = await file.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(raw, ext === '.xml' ? 'text/xml' : 'text/html');
+                const imageUrl = this.extractSourceImageFromDocument(doc);
+                doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+
+                return {
+                    ...baseResult,
+                    content: (doc.body || doc.documentElement).textContent.replace(/\n{3,}/g, '\n\n').trim(),
+                    imageUrl
+                };
             }
 
-            if (pages.length === 0) {
-                throw new Error('No text content found in PDF');
+            if (ext === '.json') {
+                const raw = await file.text();
+                try {
+                    const data = JSON.parse(raw);
+                    return {
+                        ...baseResult,
+                        content: typeof data === 'string' ? data : JSON.stringify(data, null, 2)
+                    };
+                } catch {
+                    return {
+                        ...baseResult,
+                        content: raw
+                    };
+                }
             }
 
             return {
-                content: pages.join('\n\n'),
-                imageUrl: ''
+                ...baseResult,
+                content: await file.text()
             };
         }
 
-        throw new Error(`Unsupported file type: ${ext}`);
+        return baseResult;
     }
 
-    bindSourceFileUpload() {
+    bindSourceFileUpload(form, options = {}) {
+        if (form) {
+            form._sourceFileData = this.normalizeSourceStoredFileData(options.initialSourceData || {});
+            this.updateSourceStoredFileSummary({
+                ...(options.initialSourceData || {}),
+                ...form._sourceFileData
+            });
+        }
+
         document.getElementById('src-file-upload')?.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -1086,10 +1248,13 @@ class App {
 
             try {
                 const sourceData = await this.extractSourceDataFromFile(file);
+                if (form) {
+                    form._sourceFileData = this.normalizeSourceStoredFileData(sourceData);
+                }
                 contentInput.value = sourceData.content;
 
                 if (!titleInput.value.trim()) {
-                    titleInput.value = file.name.replace(/\.[^.]+$/, '');
+                    titleInput.value = this.sourceTitleFromFileName(file.name);
                 }
 
                 if (sourceData.imageUrl && imageInput && !imageInput.value.trim()) {
@@ -1097,10 +1262,20 @@ class App {
                     this.updateSourceImagePreview(sourceData.imageUrl);
                 }
 
-                status.textContent = sourceData.imageUrl
-                    ? `✅ Extracted ${sourceData.content.length} characters from ${file.name} and found an article image`
-                    : `✅ Extracted ${sourceData.content.length} characters from ${file.name}`;
-                status.style.color = 'var(--success)';
+                if (sourceData.documentKind === 'image' && imageInput && !imageInput.value.trim()) {
+                    imageInput.value = sourceData.fileDataUrl;
+                    this.updateSourceImagePreview(sourceData.fileDataUrl);
+                }
+
+                this.updateSourceStoredFileSummary(sourceData);
+
+                const extractedSummary = sourceData.content
+                    ? `Extracted ${sourceData.content.length.toLocaleString()} characters from ${file.name}.`
+                    : `Stored ${file.name} locally for viewing and backup.`;
+                status.textContent = sourceData.extractionError
+                    ? `⚠ ${extractedSummary} ${sourceData.extractionError}`
+                    : `✅ ${extractedSummary}`;
+                status.style.color = sourceData.extractionError ? 'var(--warning)' : 'var(--success)';
             } catch (err) {
                 status.textContent = `❌ Failed: ${err.message}`;
                 status.style.color = 'var(--danger)';
@@ -1116,11 +1291,19 @@ class App {
     }
 
     buildSourceDraft(source = {}) {
+        const fileData = this.normalizeSourceStoredFileData(source);
         return {
-            title: String(source.title || '').trim() || this.sourceTitleFromText(source.content || ''),
+            title: String(source.title || '').trim()
+                || this.sourceTitleFromFileName(fileData.fileName)
+                || this.sourceTitleFromText(source.content || ''),
             content: String(source.content || ''),
-            imageUrl: String(source.imageUrl || '').trim(),
-            sourceType: source.sourceType || 'article',
+            imageUrl: String(source.imageUrl || (fileData.documentKind === 'image' ? fileData.fileDataUrl : '')).trim(),
+            documentKind: fileData.documentKind,
+            fileName: fileData.fileName,
+            fileMimeType: fileData.fileMimeType,
+            fileSize: fileData.fileSize,
+            fileDataUrl: fileData.fileDataUrl,
+            sourceType: source.sourceType || this.getDefaultSourceTypeForDocumentKind(fileData.documentKind),
             language: String(source.language || '').trim() || 'Japanese',
             tags: Array.isArray(source.tags) ? source.tags.filter(Boolean) : []
         };
@@ -1128,8 +1311,8 @@ class App {
 
     async saveSource(source, opts = {}) {
         const draft = this.buildSourceDraft(source);
-        if (!draft.title || !draft.content.trim()) {
-            throw new Error('A title and article content are required.');
+        if (!draft.title || (!draft.content.trim() && !draft.fileDataUrl)) {
+            throw new Error('A title and either extracted text or an uploaded file are required.');
         }
 
         await this.db.addSource(draft);
@@ -1139,7 +1322,7 @@ class App {
         }
 
         if (opts.toastMessage !== false) {
-            this.showToast(opts.toastMessage || 'Text added to library!', 'success');
+            this.showToast(opts.toastMessage || 'Source added to library!', 'success');
         }
 
         this.scheduleAutoBackup(opts.backupReason || 'source add');
@@ -1151,26 +1334,19 @@ class App {
 
     async importDroppedSources(dataTransfer) {
         const files = Array.from(dataTransfer?.files || []);
-        const sourceFiles = files.filter(file => !this.isImageFile(file));
-        const imageFiles = files.filter(file => this.isImageFile(file));
-
-        if (sourceFiles.length > 0) {
-            const pairedImageUrls = [];
-
-            if (imageFiles.length === sourceFiles.length || (sourceFiles.length === 1 && imageFiles.length === 1)) {
-                for (const file of imageFiles) {
-                    pairedImageUrls.push(await this.readFileAsDataUrl(file));
-                }
-            }
-
-            for (const [index, file] of sourceFiles.entries()) {
+        if (files.length > 0) {
+            for (const file of files) {
                 const sourceData = await this.extractSourceDataFromFile(file);
-                const imageUrl = sourceData.imageUrl || pairedImageUrls[index] || (sourceFiles.length === 1 ? pairedImageUrls[0] : '') || '';
                 await this.saveSource({
-                    title: file.name.replace(/\.[^.]+$/, ''),
+                    title: this.sourceTitleFromFileName(file.name),
                     content: sourceData.content,
-                    imageUrl,
-                    sourceType: 'article',
+                    imageUrl: sourceData.imageUrl,
+                    documentKind: sourceData.documentKind,
+                    fileName: sourceData.fileName,
+                    fileMimeType: sourceData.fileMimeType,
+                    fileSize: sourceData.fileSize,
+                    fileDataUrl: sourceData.fileDataUrl,
+                    sourceType: this.getDefaultSourceTypeForDocumentKind(sourceData.documentKind),
                     language: 'Japanese'
                 }, {
                     toastMessage: false,
@@ -1178,7 +1354,7 @@ class App {
                 });
             }
 
-            return { addedCount: sourceFiles.length, mode: 'files' };
+            return { addedCount: files.length, mode: 'files' };
         }
 
         const droppedText = String(dataTransfer?.getData('text/plain') || '').trim();
@@ -1220,11 +1396,11 @@ class App {
             try {
                 const result = await this.importDroppedSources(e.dataTransfer);
                 if (result.mode === 'files') {
-                    this.showToast(`${result.addedCount} text${result.addedCount === 1 ? '' : 's'} added to the library.`, 'success');
+                    this.showToast(`${result.addedCount} source${result.addedCount === 1 ? '' : 's'} added to the library.`, 'success');
                 } else if (result.mode === 'text') {
                     this.showToast('Dropped text loaded. Review it and save when ready.', 'success');
                 } else {
-                    this.showToast('Drop a supported text file, PDF, HTML file, or plain text.', 'error');
+                    this.showToast('Drop files or plain text to create new sources.', 'error');
                 }
             } catch (err) {
                 this.showToast(`Drop import failed: ${err.message}`, 'error');
@@ -1250,7 +1426,7 @@ class App {
                 sourceId: source.id,
                 ts: source.createdAt || 0,
                 icon: '📚',
-                label: 'Added text',
+                label: 'Added source',
                 title: source.title,
                 subtitle: [source.sourceType, source.language].filter(Boolean).join(' · ')
             });
@@ -2786,7 +2962,7 @@ class App {
                 <div class="stat-card">
                     <div class="stat-icon">📚</div>
                     <div class="stat-value">${stats.totalSources}</div>
-                    <div class="stat-label">Texts</div>
+                    <div class="stat-label">Sources</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon">📝</div>
@@ -2804,7 +2980,7 @@ class App {
                 <button class="btn btn-primary btn-lg" id="dash-add-item">➕ Add Item</button>
                 <button class="btn btn-secondary btn-lg" id="dash-import-item-list">📥 Import List</button>
                 <button class="btn btn-secondary btn-lg" id="dash-review" ${stats.totalHighlights === 0 ? 'disabled' : ''}>🧠 ${stats.dueCount > 0 ? `Review (${stats.dueCount})` : 'Review Items'}</button>
-                <button class="btn btn-secondary btn-lg" id="dash-add-source">📚 Add Text</button>
+                <button class="btn btn-secondary btn-lg" id="dash-add-source">📚 Add Source</button>
                 <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
             </div>
 
@@ -2813,7 +2989,7 @@ class App {
                 <div>
                     <div class="dashboard-dropzone-kicker">Quick Import</div>
                     <div class="library-dropzone-title">Drop files or text onto the dashboard</div>
-                    <p>Drag a text file, PDF, HTML file, or plain text here to add it fast. Plain text opens the editor first so you can review it before saving.</p>
+                    <p>Drag text files, PDFs, images, or any other file here to store and annotate them locally. Plain text still opens the editor first so you can review it before saving.</p>
                 </div>
             </div>
 
@@ -2911,15 +3087,15 @@ class App {
             const countLabel = document.getElementById('lib-count');
             const pagination = this.paginateEntries('library', visibleSources);
             const pageSources = pagination.items;
-            const totalLabel = `${totalSources} text${totalSources === 1 ? '' : 's'}`;
+            const totalLabel = `${totalSources} source${totalSources === 1 ? '' : 's'}`;
 
             if (countLabel) {
                 if (visibleSources.length === totalSources) {
-                    countLabel.textContent = this.formatPaginationSummary(pagination, 'text');
+                    countLabel.textContent = this.formatPaginationSummary(pagination, 'source');
                 } else if (visibleSources.length === 0) {
                     countLabel.textContent = `0 of ${totalLabel}`;
                 } else {
-                    countLabel.textContent = `${this.formatPaginationSummary(pagination, 'matching text')} filtered from ${totalLabel}`;
+                    countLabel.textContent = `${this.formatPaginationSummary(pagination, 'matching source')} filtered from ${totalLabel}`;
                 }
             }
 
@@ -2927,13 +3103,13 @@ class App {
                 container.innerHTML = totalSources === 0 ? `
                     <div class="empty-state">
                         <div class="empty-icon">📚</div>
-                        <p>Your text library is empty. Add a source if you want to pull study items directly from reading.</p>
-                        <button class="btn btn-primary" id="lib-add-empty">➕ Add Your First Text</button>
+                        <p>Your library is empty. Add text, PDFs, images, or other files to start annotating locally.</p>
+                        <button class="btn btn-primary" id="lib-add-empty">➕ Add Your First Source</button>
                     </div>
                 ` : `
                     <div class="empty-state">
                         <div class="empty-icon">🗂️</div>
-                        <p>No texts match the current filters. Adjust the search or clear the filter bar.</p>
+                        <p>No sources match the current filters. Adjust the search or clear the filter bar.</p>
                         <button class="btn btn-secondary" id="lib-clear-filters">Reset Filters</button>
                     </div>
                 `;
@@ -2951,7 +3127,8 @@ class App {
             }
 
             container.innerHTML = `
-                ${this.renderPaginationControls('library', pagination, 'text', 'texts', 'list-pagination-top')}
+                ${this.renderPaginationControls('library', pagination, 'source', 'sources', 'list-pagination-top')}
+
                 <div class="vocab-table-shell">
                     <table class="vocab-table library-table">
                         <colgroup>
@@ -2978,16 +3155,20 @@ class App {
                         </thead>
                         <tbody>
                     ${pageSources.map(source => {
-                        const titleText = String(source.title || '').trim() || 'Untitled text';
-                        const previewText = String(source.content || '').replace(/\s+/g, ' ').trim().substring(0, 200) || '—';
+                        const titleText = String(source.title || '').trim() || 'Untitled source';
+                        const previewText = this.getSourcePreviewText(source);
                         const sourceType = source.sourceType || 'article';
-                        const sourceIcon = sourceType === 'audio'
-                            ? '🎧'
-                            : sourceType === 'video'
-                                ? '🎬'
-                                : sourceType === 'other'
-                                    ? '📋'
-                                    : '📄';
+                        const sourceIcon = source.documentKind === 'image'
+                            ? '🖼️'
+                            : source.documentKind === 'pdf'
+                                ? '📕'
+                                : sourceType === 'audio'
+                                    ? '🎧'
+                                    : sourceType === 'video'
+                                        ? '🎬'
+                                        : sourceType === 'other'
+                                            ? '📋'
+                                            : '📄';
                         const languageText = String(source.language || '').trim() || '—';
                         const tagsText = Array.isArray(source.tags) && source.tags.length > 0
                             ? source.tags.join(', ')
@@ -3026,7 +3207,7 @@ class App {
                         </tbody>
                     </table>
                 </div>
-                ${this.renderPaginationControls('library', pagination, 'text', 'texts', 'list-pagination-bottom')}
+                ${this.renderPaginationControls('library', pagination, 'source', 'sources', 'list-pagination-bottom')}
             `;
 
             container.querySelectorAll('.library-row').forEach(row => {
@@ -3128,8 +3309,8 @@ class App {
             <div class="view-header">
                 <h2>📚 Library</h2>
                 <div class="view-header-actions">
-                    <span id="lib-count" style="color:var(--text-secondary);font-size:0.85rem;">${totalSources} texts</span>
-                    <button class="btn btn-primary" id="lib-add">➕ Add Text</button>
+                    <span id="lib-count" style="color:var(--text-secondary);font-size:0.85rem;">${totalSources} sources</span>
+                    <button class="btn btn-primary" id="lib-add">➕ Add Source</button>
                 </div>
             </div>
 
@@ -3157,7 +3338,7 @@ class App {
 
             <div class="library-dropzone" id="library-dropzone">
                 <div class="library-dropzone-title">Drop files or text here</div>
-                <p>Drop text files, PDFs, HTML, or pasted text to add them to the library. If you drop one image with one article file, it becomes the article image. Single-click a card to read it, double-click to edit it.</p>
+                <p>Drop text files, PDFs, images, or pasted text to add them to the library. Stored files stay local and are included in backups. Single-click a row to open it and double-click to edit it.</p>
             </div>
 
             <div id="library-cards-container"></div>
@@ -3178,7 +3359,7 @@ class App {
         const tagMarkup = this.buildSourceTagMarkup(tagChoices, selectedTags);
 
         this.showModal(`
-            <h3>📝 Add New Text</h3>
+            <h3>📝 Add New Source</h3>
             <form id="add-source-form">
                 <div class="form-group">
                     <label>Title</label>
@@ -3218,13 +3399,14 @@ class App {
                     <div id="src-image-preview" class="hidden"></div>
                 </div>
                 <div class="form-group">
-                    <label>Upload File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
-                    <input type="file" id="src-file-upload" accept=".txt,.pdf,.html,.htm,.md,.csv,.xml,.json,.srt,.vtt,.epub">
+                    <label>Upload File <span class="form-hint">text, image, PDF, or any other file to store locally</span></label>
+                    <input type="file" id="src-file-upload">
                     <div id="src-file-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
                 </div>
+                <div id="src-stored-file" class="item-meta-panel source-file-summary hidden"></div>
                 <div class="form-group">
-                    <label>Content</label>
-                    <textarea id="src-content" rows="10" placeholder="Paste your text content here or upload a file above..." required>${this.esc(initialData.content || '')}</textarea>
+                    <label>Content / Extracted Text</label>
+                    <textarea id="src-content" rows="10" placeholder="Paste text content here, or upload a file above to store it locally...">${this.esc(initialData.content || '')}</textarea>
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="src-cancel">Cancel</button>
@@ -3234,7 +3416,7 @@ class App {
         `, { size: 'modal-lg' });
 
         const form = document.getElementById('add-source-form');
-        this.bindSourceFileUpload();
+        this.bindSourceFileUpload(form, { initialSourceData: initialData });
         this.bindSourceImageControls();
         this.bindSourceTagChips(form);
 
@@ -3243,7 +3425,11 @@ class App {
             e.preventDefault();
             const title = document.getElementById('src-title').value.trim();
             const content = document.getElementById('src-content').value;
-            if (!title || !content.trim()) return;
+            const fileData = this.normalizeSourceStoredFileData(form._sourceFileData || {});
+            if (!title || (!content.trim() && !this.sourceHasStoredFile(fileData))) {
+                this.showToast('Add a title plus either text content or a file to upload.', 'error');
+                return;
+            }
 
             const tags = this.getSourceTagsFromForm(form);
 
@@ -3251,6 +3437,11 @@ class App {
                 title,
                 content,
                 imageUrl: document.getElementById('src-image').value.trim(),
+                documentKind: fileData.documentKind,
+                fileName: fileData.fileName,
+                fileMimeType: fileData.fileMimeType,
+                fileSize: fileData.fileSize,
+                fileDataUrl: fileData.fileDataUrl,
                 sourceType: document.getElementById('src-type').value,
                 language: document.getElementById('src-lang').value.trim(),
                 tags
@@ -3294,7 +3485,7 @@ class App {
         if (Number.isFinite(target.highlightId)) {
             selector = `.hl[data-hl-id="${target.highlightId}"]`;
         } else if (Number.isFinite(target.noteId)) {
-            selector = `.hl-reading-note[data-note-id="${target.noteId}"]`;
+            selector = `.reader-file-note-marker[data-note-id="${target.noteId}"], .hl-reading-note[data-note-id="${target.noteId}"]`;
         }
 
         if (!selector) return false;
@@ -3345,9 +3536,25 @@ class App {
         if (!this.currentSource) return;
 
         const source = this.currentSource;
-        const items = await this.db.getHighlightsBySource(source.id);
-        const readingNotes = await this.db.getReadingNotesBySource(source.id);
+        const [items, readingNotes] = await Promise.all([
+            this.db.getHighlightsBySource(source.id),
+            this.db.getReadingNotesBySource(source.id)
+        ]);
+        const usesFileViewer = this.sourceUsesFileViewer(source);
         const view = document.getElementById('view-reader');
+        const sortedItems = [...items].sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0));
+        const sortedReadingNotes = [...readingNotes].sort((a, b) => {
+            const left = a.anchorType === 'point'
+                ? ((a.pageNumber || 0) * 1000000) + Math.round((a.anchorY || 0) * 1000)
+                : (a.startOffset || 0);
+            const right = b.anchorType === 'point'
+                ? ((b.pageNumber || 0) * 1000000) + Math.round((b.anchorY || 0) * 1000)
+                : (b.startOffset || 0);
+            return left - right;
+        });
+        const storedFileLabel = this.sourceHasStoredFile(source)
+            ? `${this.getSourceDocumentKindLabel(source.documentKind)} · ${source.fileName || source.fileMimeType || 'stored locally'}`
+            : '';
 
         view.innerHTML = `
             <button class="reader-back" id="reader-back">← Back to Library</button>
@@ -3364,19 +3571,40 @@ class App {
                     <span>${this.formatDate(source.createdAt)}</span>
                     <span>📝 ${items.length} items</span>
                     <span>📌 ${readingNotes.length} notes</span>
+                    ${storedFileLabel ? `<span>📎 ${this.esc(storedFileLabel)}</span>` : ''}
                     <button class="btn btn-sm btn-secondary" id="reader-edit-source" title="Edit source">✏️</button>
                     <button class="btn btn-sm btn-secondary" id="reader-delete-source" title="Delete source" style="color:var(--danger)">🗑️</button>
                 </div>
             </div>
             <div class="reader-layout">
-                <div class="reader-text-area">
-                    <div id="reader-content">${this.renderTextContent(source.content, items, readingNotes)}</div>
+                <div class="reader-text-area ${usesFileViewer ? 'reader-text-area-file' : ''}">
+                    ${usesFileViewer ? `
+                        <div class="reader-file-toolbar">
+                            <div class="reader-file-toolbar-copy">
+                                <strong>${this.esc(this.getSourceDocumentKindLabel(source.documentKind))} Viewer</strong>
+                                <span>${this.esc(source.fileName || source.fileMimeType || 'Stored locally')}</span>
+                            </div>
+                            ${this.sourceSupportsPinnedNotes(source)
+                                ? '<button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>'
+                                : ''}
+                        </div>
+                        <div id="reader-file-note-hint" class="reader-file-note-hint">
+                            ${this.sourceSupportsPinnedNotes(source)
+                                ? 'Pinned notes stay attached to the same PDF page or image position.'
+                                : 'This stored file is included in local backups. Inline pins are available for images and PDFs.'}
+                        </div>
+                        <div id="reader-content" class="reader-content-file">
+                            <div class="reader-file-loading">Loading ${this.esc(this.getSourceDocumentKindLabel(source.documentKind).toLowerCase())}...</div>
+                        </div>
+                    ` : `
+                        <div id="reader-content">${this.renderTextContent(source.content, items, readingNotes)}</div>
+                    `}
                 </div>
                 <div class="reader-sidebar">
                     <h3>Saved Items (${items.length})</h3>
                     <div id="reader-hl-list">
                         ${items.length === 0 ? '<p style="color:var(--text-muted);font-size:0.82rem;">Select text, then save it as a study item.</p>' : ''}
-                        ${items.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(item => {
+                        ${sortedItems.map(item => {
                             const canJump = Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset);
                             return `
                             <div class="hl-list-item" data-hl-id="${item.id}" title="${canJump ? 'Jump to this item in the article' : 'Open item details'}">
@@ -3393,13 +3621,17 @@ class App {
                     ${readingNotes.length > 0 ? `
                         <h3 style="margin-top:20px;">📌 Reading Notes (${readingNotes.length})</h3>
                         <div id="reader-notes-list">
-                            ${readingNotes.sort((a, b) => (a.startOffset || 0) - (b.startOffset || 0)).map(note => {
-                                const canJump = Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+                            ${sortedReadingNotes.map(note => {
+                                const canJump = note.anchorType === 'point'
+                                    ? Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY)
+                                    : Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+                                const locationLabel = this.getReadingNoteLocationLabel(note, source);
                                 return `
                                 <div class="hl-list-item reading-note-item" data-note-id="${note.id}" title="${canJump ? 'Jump to this note in the article' : 'Open note details'}">
                                     <div class="hl-text" style="color:var(--${note.color === 'blue' ? 'accent' : note.color === 'green' ? 'success' : note.color === 'red' ? 'danger' : 'warning'});">
-                                        📌 ${this.esc(note.text.substring(0, 40))}${note.text.length > 40 ? '…' : ''}
+                                        📌 ${this.esc(this.getReadingNoteDisplayText(note, source))}
                                     </div>
+                                    ${locationLabel ? `<div class="hl-meta-line">${this.esc(locationLabel)}</div>` : ''}
                                     <div class="hl-note note-text">${this.esc(note.note)}</div>
                                 </div>
                             `;
@@ -3417,7 +3649,7 @@ class App {
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
         view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
             const targetElement = e.target instanceof Element ? e.target : e.target?.parentElement;
-            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id]')) return;
+            if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id]')) return;
 
             this.hideSelectionToolbar();
             window.getSelection()?.removeAllRanges();
@@ -3449,7 +3681,10 @@ class App {
             item.addEventListener('click', async () => {
                 const noteId = parseInt(item.dataset.noteId, 10);
                 const note = readingNotes.find(entry => entry.id === noteId);
-                if (Number.isFinite(note?.startOffset) && Number.isFinite(note?.endOffset)) {
+                const canJump = note?.anchorType === 'point'
+                    ? Number.isFinite(note?.anchorX) && Number.isFinite(note?.anchorY)
+                    : Number.isFinite(note?.startOffset) && Number.isFinite(note?.endOffset);
+                if (canJump) {
                     await this.openReader(source.id, { noteId });
                     return;
                 }
@@ -3457,20 +3692,317 @@ class App {
                 this.showReadingNoteDetail(noteId, source.id);
             });
         });
-        view.querySelectorAll('.hl-reading-note[data-note-id]').forEach(span => {
-            span.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.showReadingNoteDetail(parseInt(span.dataset.noteId, 10));
-            });
-        });
 
         if (this._selectionHandler) {
             document.removeEventListener('mouseup', this._selectionHandler);
+            this._selectionHandler = null;
         }
-        this._selectionHandler = (e) => this.handleTextSelection(e);
-        document.addEventListener('mouseup', this._selectionHandler);
+
+        this.hideSelectionToolbar();
+        this.readerFileNoteMode = false;
+
+        if (usesFileViewer) {
+            await this.renderStoredFileViewer(source, readingNotes);
+            document.getElementById('reader-add-file-note')?.addEventListener('click', () => this.toggleReaderFileNoteMode());
+            this.updateReaderFileNoteModeUi();
+        } else {
+            view.querySelectorAll('.hl-reading-note[data-note-id]').forEach(span => {
+                span.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.showReadingNoteDetail(parseInt(span.dataset.noteId, 10));
+                });
+            });
+
+            this._selectionHandler = (e) => this.handleTextSelection(e);
+            document.addEventListener('mouseup', this._selectionHandler);
+        }
+
         this.bindSourceImageFallback(view);
         document.getElementById('main').scrollTop = 0;
+    }
+
+    getReadingNoteLocationLabel(note, source = this.currentSource) {
+        if (!note) return '';
+
+        if (note.anchorType === 'point') {
+            if (String(note.targetLabel || '').trim()) {
+                return String(note.targetLabel || '').trim();
+            }
+            if (Number.isFinite(note.pageNumber)) {
+                return `Page ${note.pageNumber}`;
+            }
+            if (source?.documentKind === 'image') {
+                return 'Image pin';
+            }
+            return 'Pinned file note';
+        }
+
+        if (Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)) {
+            return 'Text selection';
+        }
+
+        return '';
+    }
+
+    getReadingNoteDisplayText(note, source = this.currentSource) {
+        if (!note) return '';
+
+        if (note.anchorType === 'point') {
+            return this.getReadingNoteLocationLabel(note, source) || 'Pinned note';
+        }
+
+        const text = String(note.text || '').trim();
+        return `${text.substring(0, 40)}${text.length > 40 ? '…' : ''}`;
+    }
+
+    clampNumber(value, min = 0, max = 1) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return min;
+        return Math.min(max, Math.max(min, numeric));
+    }
+
+    dataUrlToUint8Array(dataUrl = '') {
+        const value = String(dataUrl || '');
+        const [meta, payload] = value.split(',', 2);
+
+        if (!meta || typeof payload !== 'string') {
+            throw new Error('Invalid stored file data');
+        }
+
+        if (/;base64/i.test(meta)) {
+            const binary = atob(payload);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        return new TextEncoder().encode(decodeURIComponent(payload));
+    }
+
+    renderReaderFileNoteMarker(note) {
+        const colorMeta = this.getReadingNoteColorMeta(note.color || 'yellow');
+        const anchorX = this.clampNumber(note.anchorX, 0.02, 0.98);
+        const anchorY = this.clampNumber(note.anchorY, 0.02, 0.98);
+        const title = `${this.getReadingNoteLocationLabel(note, this.currentSource) || 'Pinned note'} — ${note.note || ''}`.trim();
+
+        return `
+            <button
+                type="button"
+                class="reader-file-note-marker note-color-${colorMeta.value}"
+                data-note-id="${note.id}"
+                style="left:${(anchorX * 100).toFixed(2)}%;top:${(anchorY * 100).toFixed(2)}%;"
+                title="${this.esc(title)}"
+            >📌</button>
+        `;
+    }
+
+    bindReaderFileNoteMarkerClicks(scope = document) {
+        scope.querySelectorAll('.reader-file-note-marker[data-note-id]').forEach(marker => {
+            marker.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showReadingNoteDetail(parseInt(marker.dataset.noteId, 10), this.currentSource?.id);
+            });
+        });
+    }
+
+    toggleReaderFileNoteMode(force = null) {
+        if (!this.sourceSupportsPinnedNotes(this.currentSource || {})) {
+            this.readerFileNoteMode = false;
+            this.updateReaderFileNoteModeUi();
+            return;
+        }
+
+        this.readerFileNoteMode = typeof force === 'boolean' ? force : !this.readerFileNoteMode;
+        this.updateReaderFileNoteModeUi();
+    }
+
+    updateReaderFileNoteModeUi() {
+        const button = document.getElementById('reader-add-file-note');
+        const hint = document.getElementById('reader-file-note-hint');
+        const supportsPinnedNotes = this.sourceSupportsPinnedNotes(this.currentSource || {});
+
+        if (button) {
+            button.textContent = this.readerFileNoteMode ? '✖ Cancel Pin' : '📌 Place Note';
+            button.classList.toggle('btn-primary', this.readerFileNoteMode);
+            button.classList.toggle('btn-secondary', !this.readerFileNoteMode);
+        }
+
+        if (hint) {
+            if (this.readerFileNoteMode) {
+                hint.textContent = this.currentSource?.documentKind === 'pdf'
+                    ? 'Click on the PDF page where you want to pin the note.'
+                    : 'Click on the image where you want to pin the note.';
+            } else if (supportsPinnedNotes) {
+                hint.textContent = 'Pinned notes stay attached to the same PDF page or image position.';
+            } else {
+                hint.textContent = 'This stored file is included in local backups. Inline pins are available for images and PDFs.';
+            }
+        }
+    }
+
+    handleReaderFilePlacement(event) {
+        if (!this.currentSource || !this.readerFileNoteMode) return;
+        if (event.target instanceof Element && event.target.closest('.reader-file-note-marker[data-note-id]')) {
+            return;
+        }
+
+        const host = event.currentTarget;
+        if (!(host instanceof HTMLElement)) return;
+
+        const rect = host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+
+        const pageNumber = Number.parseInt(host.dataset.pageNumber || '', 10);
+        const anchorX = this.clampNumber((event.clientX - rect.left) / rect.width, 0.02, 0.98);
+        const anchorY = this.clampNumber((event.clientY - rect.top) / rect.height, 0.02, 0.98);
+        const targetLabel = String(host.dataset.noteTarget || '').trim()
+            || (Number.isFinite(pageNumber) ? `Page ${pageNumber}` : this.getSourceDocumentKindLabel(this.currentSource.documentKind));
+
+        this.readerFileNoteMode = false;
+        this.updateReaderFileNoteModeUi();
+
+        this.showAddReadingNoteModal({
+            sourceId: this.currentSource.id,
+            text: targetLabel,
+            anchorType: 'point',
+            pageNumber: Number.isFinite(pageNumber) ? pageNumber : null,
+            anchorX,
+            anchorY,
+            targetLabel,
+            previewLabel: `${targetLabel} · pinned note`
+        });
+    }
+
+    async renderStoredFileViewer(source, readingNotes = []) {
+        const container = document.getElementById('reader-content');
+        if (!container) return;
+
+        if (source.documentKind === 'image') {
+            this.renderImageFileViewer(container, source, readingNotes);
+            return;
+        }
+
+        if (source.documentKind === 'pdf') {
+            await this.renderPdfFileViewer(container, source, readingNotes);
+            return;
+        }
+
+        this.renderGenericFileViewer(container, source);
+    }
+
+    renderImageFileViewer(container, source, readingNotes = []) {
+        const pointNotes = readingNotes.filter(note => note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY));
+
+        container.innerHTML = `
+            <div class="reader-file-viewer reader-image-viewer">
+                <div class="reader-file-note-host reader-image-frame" data-note-target="Image">
+                    <img src="${this.esc(source.fileDataUrl)}" alt="${this.esc(source.title)}" class="reader-image-document">
+                    <div class="reader-file-note-layer">
+                        ${pointNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        container.querySelector('.reader-file-note-host')?.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
+        this.bindReaderFileNoteMarkerClicks(container);
+    }
+
+    async renderPdfFileViewer(container, source, readingNotes = []) {
+        const renderToken = ++this._fileRenderToken;
+
+        if (typeof pdfjsLib === 'undefined') {
+            this.renderGenericFileViewer(container, source, {
+                emptyMessage: 'PDF.js is unavailable, so the PDF cannot be rendered inline right now.'
+            });
+            return;
+        }
+
+        try {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            const pdf = await pdfjsLib.getDocument({ data: this.dataUrlToUint8Array(source.fileDataUrl) }).promise;
+
+            if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {
+                return;
+            }
+
+            const pagesMarkup = Array.from({ length: pdf.numPages }, (_, index) => {
+                const pageNumber = index + 1;
+                const pageNotes = readingNotes.filter(note => note.anchorType === 'point' && (note.pageNumber || 1) === pageNumber);
+                return `
+                    <section class="reader-pdf-page">
+                        <div class="reader-pdf-page-label">Page ${pageNumber}</div>
+                        <div class="reader-file-note-host reader-pdf-page-stage" data-page-number="${pageNumber}" data-note-target="Page ${pageNumber}">
+                            <canvas class="reader-pdf-canvas" data-page-canvas="${pageNumber}"></canvas>
+                            <div class="reader-file-note-layer">
+                                ${pageNotes.map(note => this.renderReaderFileNoteMarker(note)).join('')}
+                            </div>
+                        </div>
+                    </section>
+                `;
+            }).join('');
+
+            container.innerHTML = `<div class="reader-file-viewer reader-pdf-viewer">${pagesMarkup}</div>`;
+
+            const pixelRatio = window.devicePixelRatio || 1;
+            for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex++) {
+                if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {
+                    return;
+                }
+
+                const page = await pdf.getPage(pageIndex);
+                const viewport = page.getViewport({ scale: 1.35 });
+                const canvas = container.querySelector(`[data-page-canvas="${pageIndex}"]`);
+                if (!(canvas instanceof HTMLCanvasElement)) continue;
+
+                const context = canvas.getContext('2d');
+                if (!context) continue;
+
+                canvas.width = Math.floor(viewport.width * pixelRatio);
+                canvas.height = Math.floor(viewport.height * pixelRatio);
+                canvas.style.width = `${viewport.width}px`;
+                canvas.style.height = `${viewport.height}px`;
+                context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+                await page.render({ canvasContext: context, viewport }).promise;
+            }
+
+            container.querySelectorAll('.reader-file-note-host').forEach(host => {
+                host.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
+            });
+            this.bindReaderFileNoteMarkerClicks(container);
+        } catch (error) {
+            if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {
+                return;
+            }
+
+            this.renderGenericFileViewer(container, source, {
+                emptyMessage: error.message || 'Unable to render this PDF inline.'
+            });
+        }
+    }
+
+    renderGenericFileViewer(container, source, options = {}) {
+        const emptyMessage = String(options.emptyMessage || '').trim();
+        const fileName = source.fileName || source.title || 'stored-file';
+
+        container.innerHTML = `
+            <div class="reader-file-viewer reader-generic-viewer">
+                <div class="item-meta-panel reader-generic-file-panel">
+                    <div><strong>Stored file:</strong> ${this.esc(fileName)}</div>
+                    <div><strong>Type:</strong> ${this.esc(source.fileMimeType || 'application/octet-stream')}</div>
+                    ${Number.isFinite(source.fileSize) && source.fileSize > 0 ? `<div><strong>Size:</strong> ${this.esc(this.formatBytes(source.fileSize))}</div>` : ''}
+                    ${emptyMessage ? `<div>${this.esc(emptyMessage)}</div>` : '<div>Inline annotation pins are available for images and PDFs. This file is still stored locally and included in backups.</div>'}
+                    <div class="reader-generic-file-actions">
+                        <a class="btn btn-secondary" href="${this.esc(source.fileDataUrl)}" download="${this.esc(fileName)}">⬇ Download Stored File</a>
+                    </div>
+                </div>
+                <div class="reader-generic-embed-shell">
+                    <iframe class="reader-generic-embed" src="${this.esc(source.fileDataUrl)}" title="${this.esc(fileName)}"></iframe>
+                </div>
+            </div>
+        `;
     }
 
     renderTextContent(content, highlights, readingNotes = []) {
@@ -4083,7 +4615,9 @@ class App {
         ]);
         const anchoredItemCount = items.filter(item => Number.isFinite(item.startOffset) && Number.isFinite(item.endOffset)).length;
         const anchoredNoteCount = readingNotes.filter(note => Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset)).length;
+        const pointAnchoredNoteCount = readingNotes.filter(note => note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY)).length;
         const hasAnchoredAnnotations = anchoredItemCount > 0 || anchoredNoteCount > 0;
+        const hasPinnedFileNotes = pointAnchoredNoteCount > 0;
 
         this.showModal(`
             <h3>✏️ Edit Source</h3>
@@ -4126,17 +4660,23 @@ class App {
                     <div id="src-image-preview" class="hidden"></div>
                 </div>
                 <div class="form-group">
-                    <label>Replace From File <span class="form-hint">(.txt, .pdf, .html, .htm, .md)</span></label>
-                    <input type="file" id="src-file-upload" accept=".txt,.pdf,.html,.htm,.md,.csv,.xml,.json,.srt,.vtt,.epub">
+                    <label>Replace Stored File <span class="form-hint">upload a new file to replace the local copy</span></label>
+                    <input type="file" id="src-file-upload">
                     <div id="src-file-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
                 </div>
+                <div id="src-stored-file" class="item-meta-panel source-file-summary hidden"></div>
                 <div class="form-group">
-                    <label>Content</label>
-                    <textarea id="src-content" rows="12" required>${this.esc(latestSource.content || '')}</textarea>
+                    <label>Content / Extracted Text</label>
+                    <textarea id="src-content" rows="12">${this.esc(latestSource.content || '')}</textarea>
                 </div>
                 ${hasAnchoredAnnotations ? `
                     <div class="warning-note">
                         Editing the article body will clear ${anchoredItemCount} inline item position${anchoredItemCount === 1 ? '' : 's'} and ${anchoredNoteCount} note position${anchoredNoteCount === 1 ? '' : 's'} so saved annotations do not drift to the wrong text.
+                    </div>
+                ` : ''}
+                ${hasPinnedFileNotes ? `
+                    <div class="warning-note">
+                        Replacing the stored file will clear ${pointAnchoredNoteCount} pinned note position${pointAnchoredNoteCount === 1 ? '' : 's'} so notes do not jump to the wrong page or image area.
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -4147,7 +4687,7 @@ class App {
         `, { size: 'modal-lg' });
 
         const form = document.getElementById('edit-source-form');
-        this.bindSourceFileUpload();
+        this.bindSourceFileUpload(form, { initialSourceData: latestSource });
         this.bindSourceImageControls();
         this.bindSourceTagChips(form);
 
@@ -4156,13 +4696,33 @@ class App {
             e.preventDefault();
             const nextTitle = document.getElementById('src-title').value.trim();
             const nextContent = document.getElementById('src-content').value;
-            if (!nextTitle || !nextContent.trim()) return;
+            const nextFileData = this.normalizeSourceStoredFileData(form._sourceFileData || {});
+            if (!nextTitle || (!nextContent.trim() && !this.sourceHasStoredFile(nextFileData))) {
+                this.showToast('Keep a title plus either text content or a stored file.', 'error');
+                return;
+            }
 
             const contentChanged = nextContent !== (latestSource.content || '');
+            const currentFileData = this.normalizeSourceStoredFileData(latestSource);
+            const fileChanged = currentFileData.documentKind !== nextFileData.documentKind
+                || currentFileData.fileName !== nextFileData.fileName
+                || currentFileData.fileMimeType !== nextFileData.fileMimeType
+                || currentFileData.fileSize !== nextFileData.fileSize
+                || currentFileData.fileDataUrl !== nextFileData.fileDataUrl;
+            const detachWarnings = [];
+
             if (contentChanged && hasAnchoredAnnotations) {
                 const itemLabel = `${anchoredItemCount} saved item${anchoredItemCount === 1 ? '' : 's'}`;
                 const noteLabel = `${anchoredNoteCount} reading note${anchoredNoteCount === 1 ? '' : 's'}`;
-                const confirmed = confirm(`Update "${latestSource.title}"? ${itemLabel} and ${noteLabel} will stay in the library, but their inline positions will be cleared so they do not point to the wrong text.`);
+                detachWarnings.push(`${itemLabel} and ${noteLabel} will stay in the library, but their inline text positions will be cleared.`);
+            }
+
+            if (fileChanged && hasPinnedFileNotes) {
+                detachWarnings.push(`${pointAnchoredNoteCount} pinned file note${pointAnchoredNoteCount === 1 ? '' : 's'} will lose ${pointAnchoredNoteCount === 1 ? 'its' : 'their'} saved position.`);
+            }
+
+            if (detachWarnings.length > 0) {
+                const confirmed = confirm(`Update "${latestSource.title}"? ${detachWarnings.join(' ')}`);
                 if (!confirmed) return;
             }
 
@@ -4173,6 +4733,11 @@ class App {
                 language: document.getElementById('src-lang').value.trim(),
                 imageUrl: document.getElementById('src-image').value.trim(),
                 content: nextContent,
+                documentKind: nextFileData.documentKind,
+                fileName: nextFileData.fileName,
+                fileMimeType: nextFileData.fileMimeType,
+                fileSize: nextFileData.fileSize,
+                fileDataUrl: nextFileData.fileDataUrl,
                 tags: this.getSourceTagsFromForm(form)
             };
 
@@ -4180,14 +4745,36 @@ class App {
             if (contentChanged && hasAnchoredAnnotations) {
                 await this.db.clearSourceAnnotationOffsets(updatedSource.id);
             }
+            if (fileChanged && hasPinnedFileNotes) {
+                const notes = await this.db.getReadingNotesBySource(updatedSource.id);
+                for (const note of notes) {
+                    if (note.anchorType !== 'point' && !Number.isFinite(note.anchorX) && !Number.isFinite(note.anchorY) && !Number.isFinite(note.pageNumber)) {
+                        continue;
+                    }
+
+                    await this.db.updateReadingNote({
+                        ...note,
+                        anchorType: '',
+                        pageNumber: null,
+                        anchorX: null,
+                        anchorY: null,
+                        anchorWidth: null,
+                        anchorHeight: null,
+                        targetLabel: ''
+                    });
+                }
+            }
 
             this.closeModal();
-            this.showToast(
-                contentChanged && hasAnchoredAnnotations
-                    ? 'Text updated. Inline annotations were detached to avoid drift.'
-                    : 'Source updated!',
-                'success'
-            );
+            let successMessage = 'Source updated!';
+            if (contentChanged && hasAnchoredAnnotations && fileChanged && hasPinnedFileNotes) {
+                successMessage = 'Source updated. Text anchors and pinned file notes were detached to avoid drift.';
+            } else if (contentChanged && hasAnchoredAnnotations) {
+                successMessage = 'Text updated. Inline annotations were detached to avoid drift.';
+            } else if (fileChanged && hasPinnedFileNotes) {
+                successMessage = 'Stored file updated. Pinned file-note positions were detached to avoid drift.';
+            }
+            this.showToast(successMessage, 'success');
             this.scheduleAutoBackup(contentChanged ? 'source content update' : 'source update');
 
             if (this.currentSource?.id === updatedSource.id) {
@@ -4211,14 +4798,23 @@ class App {
 
     showAddReadingNoteModal(data) {
         if (!this.currentSource) return;
+        const isPointAnchor = data.anchorType === 'point';
+        const previewText = data.previewLabel || data.text || 'Pinned note';
+        const locationLabel = this.getReadingNoteLocationLabel(data, this.currentSource);
+
         this.showModal(`
-            <h3>📌 Add Reading Note</h3>
-            <div class="selected-text-preview">${this.esc(data.text)}</div>
+            <h3>${isPointAnchor ? '📌 Add Pinned Note' : '📌 Add Reading Note'}</h3>
+            <div class="selected-text-preview">${this.esc(previewText)}</div>
             <form id="reading-note-form">
                 <div class="form-group">
                     <label>Your Note</label>
                     <textarea id="rn-content" rows="4" placeholder="Write your thought, question, or observation..." required></textarea>
                 </div>
+                ${locationLabel ? `
+                    <div class="item-meta-panel">
+                        <div><strong>Location:</strong> ${this.esc(locationLabel)}</div>
+                    </div>
+                ` : ''}
                 <div class="form-group">
                     <label>Color</label>
                     <div class="category-chip-row">
@@ -4242,14 +4838,24 @@ class App {
             if (!content) return;
 
             const color = document.querySelector('#reading-note-form .category-chip.active')?.dataset.color || 'yellow';
+            const preservedReaderScrollTop = this.currentView === 'reader'
+                ? document.getElementById('main')?.scrollTop ?? 0
+                : null;
 
-            await this.db.addReadingNote({
+            const noteId = await this.db.addReadingNote({
                 sourceId: this.currentSource.id,
                 text: data.text,
                 note: content,
                 color,
+                anchorType: data.anchorType || '',
                 startOffset: data.startOffset,
-                endOffset: data.endOffset
+                endOffset: data.endOffset,
+                pageNumber: data.pageNumber,
+                anchorX: data.anchorX,
+                anchorY: data.anchorY,
+                anchorWidth: data.anchorWidth,
+                anchorHeight: data.anchorHeight,
+                targetLabel: data.targetLabel || ''
             });
 
             this.closeModal();
@@ -4257,6 +4863,12 @@ class App {
             window.getSelection().removeAllRanges();
             this.scheduleAutoBackup('reading note add');
             await this.renderReader();
+
+            const main = document.getElementById('main');
+            if (main && Number.isFinite(preservedReaderScrollTop)) {
+                main.scrollTop = preservedReaderScrollTop;
+            }
+            this.focusReaderTarget({ noteId });
         });
     }
 
@@ -4267,14 +4879,19 @@ class App {
         const source = Number.isFinite(resolvedSourceId) ? await this.db.getSource(resolvedSourceId) : null;
         const colorMeta = this.getReadingNoteColorMeta(note.color);
         const canJumpToSource = !!source;
-        const canJumpToNote = !!source && Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset);
+        const canJumpToNote = !!source && (
+            (note.anchorType === 'point' && Number.isFinite(note.anchorX) && Number.isFinite(note.anchorY))
+            || (Number.isFinite(note.startOffset) && Number.isFinite(note.endOffset))
+        );
+        const locationLabel = this.getReadingNoteLocationLabel(note, source);
 
         this.showModal(`
             <h3>📌 Reading Note</h3>
-            <div class="selected-text-preview">${this.esc(note.text)}</div>
+            <div class="selected-text-preview">${this.esc(this.getReadingNoteDisplayText(note, source))}</div>
             <div class="detail-stack">
                 <div class="note-text">${this.esc(note.note)}</div>
                 <div><strong>Color:</strong> <span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></div>
+                ${locationLabel ? `<div><strong>Location:</strong> ${this.esc(locationLabel)}</div>` : ''}
                 ${source ? `<div><strong>Source:</strong> ${this.esc(source.title)}</div>` : ''}
                 <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${this.formatDateTime(note.createdAt)}</div>
             </div>
@@ -4302,10 +4919,11 @@ class App {
 
     async showEditReadingNoteModal(note, source = null) {
         const linkedSource = source || (Number.isFinite(note.sourceId) ? await this.db.getSource(note.sourceId) : null);
+        const locationLabel = this.getReadingNoteLocationLabel(note, linkedSource);
 
         this.showModal(`
             <h3>✏️ Edit Reading Note</h3>
-            <div class="selected-text-preview">${this.esc(note.text)}</div>
+            <div class="selected-text-preview">${this.esc(this.getReadingNoteDisplayText(note, linkedSource))}</div>
             <form id="edit-reading-note-form">
                 <div class="form-group">
                     <label>Your Note</label>
@@ -4320,6 +4938,7 @@ class App {
                 ${linkedSource ? `
                     <div class="item-meta-panel">
                         <div><strong>Source:</strong> ${this.esc(linkedSource.title)}</div>
+                        ${locationLabel ? `<div><strong>Location:</strong> ${this.esc(locationLabel)}</div>` : ''}
                     </div>
                 ` : ''}
                 <div class="form-actions">
@@ -4337,6 +4956,10 @@ class App {
             const content = document.getElementById('edit-rn-content').value.trim();
             if (!content) return;
 
+            const preservedReaderScrollTop = this.currentView === 'reader'
+                ? document.getElementById('main')?.scrollTop ?? 0
+                : null;
+
             await this.db.updateReadingNote({
                 ...note,
                 note: content,
@@ -4349,6 +4972,11 @@ class App {
 
             if (this.currentView === 'reader') {
                 await this.renderReader();
+                const main = document.getElementById('main');
+                if (main && Number.isFinite(preservedReaderScrollTop)) {
+                    main.scrollTop = preservedReaderScrollTop;
+                }
+                this.focusReaderTarget({ noteId: note.id });
             }
             if (this.currentView === 'notes') {
                 await this.renderNotes();
@@ -4757,12 +5385,14 @@ class App {
                         ${pagination.items.map(note => {
                             const colorMeta = this.getReadingNoteColorMeta(note.color);
                             const sourceId = Number.isFinite(note.sourceId) ? note.sourceId : '';
-                            const selectedText = note.text || '—';
+                            const selectedText = this.getReadingNoteDisplayText(note, sourceMap[note.sourceId] || null) || '—';
                             const notePreview = note.note || '—';
+                            const locationLabel = this.getReadingNoteLocationLabel(note, sourceMap[note.sourceId] || null);
                             return `
                                 <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
                                     <td>
                                         <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
+                                        ${locationLabel ? `<div class="hl-meta-line">${this.esc(locationLabel)}</div>` : ''}
                                     </td>
                                     <td>
                                         <div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>

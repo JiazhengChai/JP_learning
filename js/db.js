@@ -140,10 +140,24 @@ class Database {
     }
 
     _normalizeSource(source = {}, opts = {}) {
+        const fileDataUrl = String(source.fileDataUrl || '').trim();
+        const inferredDocumentKind = fileDataUrl
+            ? (String(source.fileMimeType || '').startsWith('image/')
+                ? 'image'
+                : String(source.fileMimeType || '').includes('pdf')
+                    ? 'pdf'
+                    : 'file')
+            : 'text';
+
         return {
             ...source,
             content: this._normalizeTextContent(source.content),
             imageUrl: String(source.imageUrl || '').trim(),
+            documentKind: String(source.documentKind || inferredDocumentKind || 'text').trim() || 'text',
+            fileName: String(source.fileName || '').trim(),
+            fileMimeType: String(source.fileMimeType || '').trim(),
+            fileSize: Number.isFinite(source.fileSize) ? source.fileSize : 0,
+            fileDataUrl,
             createdAt: source.createdAt || Date.now(),
             updatedAt: opts.touch ? Date.now() : (source.updatedAt || source.createdAt || Date.now()),
             tags: Array.isArray(source.tags) ? source.tags.filter(Boolean) : []
@@ -151,12 +165,26 @@ class Database {
     }
 
     _normalizeReadingNote(note = {}) {
+        const startOffset = Number.isFinite(note.startOffset) ? note.startOffset : null;
+        const endOffset = Number.isFinite(note.endOffset) ? note.endOffset : null;
+        const anchorType = String(note.anchorType || '').trim() || (startOffset !== null && endOffset !== null ? 'text' : '');
+
         return {
             ...note,
             text: String(note.text || '').trim(),
             note: String(note.note || '').trim(),
             color: String(note.color || 'yellow').trim() || 'yellow',
-            createdAt: note.createdAt || Date.now()
+            createdAt: note.createdAt || Date.now(),
+            updatedAt: note.updatedAt || note.createdAt || Date.now(),
+            anchorType,
+            startOffset,
+            endOffset,
+            pageNumber: Number.isFinite(note.pageNumber) ? note.pageNumber : null,
+            anchorX: Number.isFinite(note.anchorX) ? note.anchorX : null,
+            anchorY: Number.isFinite(note.anchorY) ? note.anchorY : null,
+            anchorWidth: Number.isFinite(note.anchorWidth) ? note.anchorWidth : null,
+            anchorHeight: Number.isFinite(note.anchorHeight) ? note.anchorHeight : null,
+            targetLabel: String(note.targetLabel || '').trim()
         };
     }
 
@@ -168,11 +196,21 @@ class Database {
     }
 
     _sourceFingerprint(source = {}) {
+        const fileDataUrl = String(source.fileDataUrl || '');
+        const fileSignature = fileDataUrl
+            ? `${fileDataUrl.length}:${fileDataUrl.slice(0, 48)}:${fileDataUrl.slice(-48)}`
+            : '';
+
         return [
             String(source.title || '').trim().toLowerCase(),
             String(source.content || '').trim().toLowerCase(),
             String(source.sourceType || 'other').trim().toLowerCase(),
-            String(source.language || '').trim().toLowerCase()
+            String(source.language || '').trim().toLowerCase(),
+            String(source.documentKind || '').trim().toLowerCase(),
+            String(source.fileName || '').trim().toLowerCase(),
+            String(source.fileMimeType || '').trim().toLowerCase(),
+            Number.isFinite(source.fileSize) ? source.fileSize : 0,
+            fileSignature
         ].join('::');
     }
 
@@ -372,14 +410,15 @@ class Database {
             const store = this._store('readingNotes', 'readonly');
             const idx = store.index('sourceId');
             const req = idx.getAll(sourceId);
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => resolve(req.result.map(note => this._normalizeReadingNote(note)));
             req.onerror = () => reject(req.error);
         });
     }
 
     async getAllReadingNotes() {
         const store = this._store('readingNotes', 'readonly');
-        return this._req(store, 'getAll');
+        const notes = await this._req(store, 'getAll');
+        return notes.map(note => this._normalizeReadingNote(note));
     }
 
     async updateReadingNote(note) {

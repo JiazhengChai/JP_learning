@@ -326,6 +326,63 @@ test('source imageUrl is normalized and included in exports', async () => {
     db.db.close();
 });
 
+test('file-backed sources and point-anchored notes round-trip through backup export and import', async () => {
+    const db = await freshDatabase();
+    const fileDataUrl = 'data:application/pdf;base64,JVBERi0xLjQKJcTl8uXr';
+    const sourceId = await db.addSource({
+        title: 'Annotated PDF',
+        content: 'Extracted PDF text',
+        sourceType: 'article',
+        language: 'Japanese',
+        documentKind: 'pdf',
+        fileName: 'lesson.pdf',
+        fileMimeType: 'application/pdf',
+        fileSize: 18,
+        fileDataUrl
+    });
+
+    await db.addReadingNote({
+        sourceId,
+        text: 'Page 1 note',
+        note: 'Pinned beside the chart',
+        color: 'blue',
+        anchorType: 'point',
+        pageNumber: 1,
+        anchorX: 0.42,
+        anchorY: 0.31,
+        targetLabel: 'Page 1'
+    });
+
+    const exported = await db.exportAll();
+
+    assert.equal(exported.sources[0].documentKind, 'pdf');
+    assert.equal(exported.sources[0].fileName, 'lesson.pdf');
+    assert.equal(exported.sources[0].fileMimeType, 'application/pdf');
+    assert.equal(exported.sources[0].fileDataUrl, fileDataUrl);
+    assert.equal(exported.readingNotes[0].anchorType, 'point');
+    assert.equal(exported.readingNotes[0].pageNumber, 1);
+    assert.equal(exported.readingNotes[0].anchorX, 0.42);
+    assert.equal(exported.readingNotes[0].anchorY, 0.31);
+
+    await db.importAll(exported, { mode: 'replace' });
+
+    const [restoredSource] = await db.getAllSources();
+    const [restoredNote] = await db.getAllReadingNotes();
+
+    assert.equal(restoredSource.documentKind, 'pdf');
+    assert.equal(restoredSource.fileName, 'lesson.pdf');
+    assert.equal(restoredSource.fileMimeType, 'application/pdf');
+    assert.equal(restoredSource.fileSize, 18);
+    assert.equal(restoredSource.fileDataUrl, fileDataUrl);
+    assert.equal(restoredNote.anchorType, 'point');
+    assert.equal(restoredNote.pageNumber, 1);
+    assert.equal(restoredNote.anchorX, 0.42);
+    assert.equal(restoredNote.anchorY, 0.31);
+    assert.equal(restoredNote.targetLabel, 'Page 1');
+
+    db.db.close();
+});
+
 test('source content is normalized to LF on read and export', async () => {
     const db = await freshDatabase();
     const sourceId = await db.addSource({
