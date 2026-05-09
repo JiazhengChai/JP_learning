@@ -140,7 +140,32 @@ class App {
     }
 
     masteryName(level) {
-        return ['Again', 'Hard', 'Good', 'Easy', 'Easy+', 'Easy++'][level] || 'Again';
+        return this.masteryLabel(this.masteryFilterKey(level));
+    }
+
+    masteryFilterKey(level) {
+        const normalizedLevel = Number.isFinite(level) ? level : 0;
+
+        if (normalizedLevel <= 0) return 'again';
+        if (normalizedLevel === 1) return 'hard';
+        if (normalizedLevel <= 3) return 'good';
+        return 'easy';
+    }
+
+    masteryLabel(value) {
+        return {
+            again: 'Again',
+            hard: 'Hard',
+            good: 'Good',
+            easy: 'Easy'
+        }[String(value || '').toLowerCase()] || 'Again';
+    }
+
+    getMasteryFilterOptions() {
+        return ['again', 'hard', 'good', 'easy'].map(value => ({
+            value,
+            label: this.masteryLabel(value)
+        }));
     }
 
     formatBytes(bytes) {
@@ -557,7 +582,7 @@ class App {
     itemMatchesReviewFilters(item, filters = this.reviewFilters) {
         const category = (item.category || 'General').trim() || 'General';
         const sourceKey = this.getReviewSourceKey(item);
-        const masteryLevel = Number.isFinite(item.masteryLevel) ? item.masteryLevel : 0;
+        const masteryLevel = this.masteryFilterKey(item.masteryLevel);
 
         if ((filters?.categories?.length || 0) > 0 && !filters.categories.includes(category)) {
             return false;
@@ -582,10 +607,10 @@ class App {
         if (!this.reviewFilters[group]) return;
 
         const value = group === 'masteryLevels'
-            ? Number.parseInt(rawValue, 10)
+            ? String(rawValue || '').trim().toLowerCase()
             : rawValue;
 
-        if (group === 'masteryLevels' && !Number.isFinite(value)) {
+        if (group === 'masteryLevels' && !this.getMasteryFilterOptions().some(option => option.value === value)) {
             return;
         }
 
@@ -5023,7 +5048,7 @@ class App {
                 </select>
                 <select id="vocab-filter-mastery">
                     <option value="">All Levels</option>
-                    ${Array.from({ length: 6 }, (_, level) => `<option value="${level}">${this.esc(this.masteryName(level))}</option>`).join('')}
+                    ${this.getMasteryFilterOptions().map(option => `<option value="${this.esc(option.value)}">${this.esc(option.label)}</option>`).join('')}
                 </select>
                 <select id="vocab-sort">
                     <option value="newest">Newest First</option>
@@ -5086,7 +5111,7 @@ class App {
             ...(filters || {})
         };
         const validSorts = new Set(['newest', 'oldest', 'alpha', 'chars-desc', 'mastery-desc']);
-        const validMastery = new Set(['', '0', '1', '2', '3', '4', '5']);
+        const validMastery = new Set(['', 'again', 'hard', 'good', 'easy']);
 
         nextFilters.search = typeof nextFilters.search === 'string' ? nextFilters.search : '';
         nextFilters.category = categories.includes(nextFilters.category) ? nextFilters.category : '';
@@ -5142,8 +5167,7 @@ class App {
         }
 
         if (mastery !== '') {
-            const level = Number.parseInt(mastery, 10);
-            filtered = filtered.filter(item => (item.masteryLevel || 0) === level);
+            filtered = filtered.filter(item => this.masteryFilterKey(item.masteryLevel) === mastery);
         }
 
         return filtered;
@@ -5529,10 +5553,7 @@ class App {
         });
         const categories = this.getUniqueCategories(allItems);
         const sourceOptions = this.getReviewSourceOptions(allItems, sourceMap);
-        const masteryOptions = Array.from({ length: 6 }, (_, level) => ({
-            value: String(level),
-            label: this.masteryName(level)
-        }));
+        const masteryOptions = this.getMasteryFilterOptions();
 
         this.reviewFilters = {
             categories: this.reviewFilters.categories.filter(category => categories.includes(category)),
