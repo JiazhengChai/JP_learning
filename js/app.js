@@ -140,7 +140,7 @@ class App {
     }
 
     masteryName(level) {
-        return ['New', 'Learning', 'Familiar', 'Known', 'Strong', 'Mastered'][level] || 'New';
+        return ['Again', 'Hard', 'Good', 'Easy', 'Easy+', 'Easy++'][level] || 'Again';
     }
 
     formatBytes(bytes) {
@@ -5023,12 +5023,7 @@ class App {
                 </select>
                 <select id="vocab-filter-mastery">
                     <option value="">All Levels</option>
-                    <option value="0">New</option>
-                    <option value="1">Learning</option>
-                    <option value="2">Familiar</option>
-                    <option value="3">Known</option>
-                    <option value="4">Strong</option>
-                    <option value="5">Mastered</option>
+                    ${Array.from({ length: 6 }, (_, level) => `<option value="${level}">${this.esc(this.masteryName(level))}</option>`).join('')}
                 </select>
                 <select id="vocab-sort">
                     <option value="newest">Newest First</option>
