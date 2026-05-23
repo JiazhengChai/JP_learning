@@ -478,7 +478,8 @@ test('drawing annotations round-trip through backup export and import', async ()
             startY: 0.24,
             endX: 0.47,
             endY: 0.39,
-            strokeWidth: 10
+            strokeWidth: 10,
+            rotation: 90
         }
     });
 
@@ -493,7 +494,8 @@ test('drawing annotations round-trip through backup export and import', async ()
         startY: 0.24,
         endX: 0.47,
         endY: 0.39,
-        strokeWidth: 10
+        strokeWidth: 10,
+        rotation: 90
     });
 
     await db.importAll(exported, { mode: 'replace' });
@@ -514,7 +516,8 @@ test('drawing annotations round-trip through backup export and import', async ()
         startY: 0.24,
         endX: 0.47,
         endY: 0.39,
-        strokeWidth: 10
+        strokeWidth: 10,
+        rotation: 90
     });
 
     db.db.close();

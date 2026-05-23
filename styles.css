@@ -751,6 +751,7 @@ nav { flex: 1; padding: 12px 0; }
     gap: 8px;
 }
 .reader-file-drawing-tools,
+.reader-file-drawing-actions,
 .reader-file-drawing-widths,
 .reader-file-drawing-colors {
     display: flex;
@@ -886,6 +887,7 @@ nav { flex: 1; padding: 12px 0; }
     color: var(--danger);
 }
 .reader-file-drawing,
+.reader-file-drawing-selection,
 .reader-file-drawing-preview {
     fill: none;
     stroke: currentColor;
@@ -895,12 +897,22 @@ nav { flex: 1; padding: 12px 0; }
     vector-effect: non-scaling-stroke;
     filter: drop-shadow(0 2px 5px rgba(0,0,0,0.16));
 }
+.reader-file-drawing-selection {
+    stroke: var(--border-focus);
+    stroke-width: calc(var(--reader-file-drawing-stroke-width, 6px) + 6px);
+    opacity: 0.28;
+    filter: none;
+}
 .reader-file-drawing-hitarea {
     fill: none;
     stroke: transparent;
     stroke-width: var(--reader-file-drawing-hit-width, 22px);
     vector-effect: non-scaling-stroke;
     pointer-events: none;
+}
+.reader-file-note-host:not(.reader-file-note-host-drawing-mode):not(.reader-file-note-host-pin-mode):not(.reader-file-note-host-highlight-mode) .reader-file-drawing-hitarea {
+    pointer-events: stroke;
+    cursor: pointer;
 }
 .reader-file-note-host-eraser-mode .reader-file-drawing-hitarea {
     pointer-events: stroke;
@@ -920,6 +932,9 @@ nav { flex: 1; padding: 12px 0; }
 .reader-file-drawing.reader-jump-target {
     stroke-width: calc(var(--reader-file-drawing-stroke-width, 6px) + 3px);
     filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.32));
+}
+.reader-file-drawing-group-selected .reader-file-drawing {
+    filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.28));
 }
 .reader-file-note-box {
     position: absolute;
@@ -2246,6 +2261,7 @@ nav { flex: 1; padding: 12px 0; }
         width: 100%;
     }
     .reader-file-drawing-tools,
+    .reader-file-drawing-actions,
     .reader-file-drawing-widths,
     .reader-file-drawing-colors {
         justify-content: flex-start;
