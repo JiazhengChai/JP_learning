@@ -58,6 +58,8 @@ class App {
         this.readerDrawingClipboard = null;
         this._readerFileDrawState = null;
         this._readerFileSketchState = null;
+        this._readerDrawingDragState = null;
+        this._readerDrawingNotesCache = [];
         this.migrationNotice = null;
     }
 
@@ -753,6 +755,7 @@ class App {
     }
 
     syncReaderDrawingSelectionUi() {
+        // Update selection class and inline selection outline on each drawing group
         document.querySelectorAll('.reader-file-drawing-group[data-note-id]').forEach(group => {
             const noteId = Number.parseInt(group.dataset.noteId || '', 10);
             const isSelected = Number.isFinite(noteId) && noteId === this.readerSelectedDrawingId;
@@ -776,10 +779,29 @@ class App {
             }
         });
 
+        // Remove stale selection overlays
+        document.querySelectorAll('.reader-drawing-selection-overlay').forEach(el => el.remove());
+
+        // Build overlay for the currently selected note
+        const selectedNote = Number.isFinite(this.readerSelectedDrawingId)
+            ? (this._readerDrawingNotesCache || []).find(n => n.id === this.readerSelectedDrawingId)
+            : null;
+
+        if (selectedNote) {
+            document.querySelectorAll('.reader-file-drawing-layer').forEach(layer => {
+                const group = layer.querySelector(`.reader-file-drawing-group[data-note-id="${selectedNote.id}"]`);
+                if (group) {
+                    const overlay = this.buildReaderDrawingSelectionOverlay(selectedNote);
+                    layer.appendChild(overlay);
+                }
+            });
+        }
+
         this.updateReaderFileNoteModeUi();
     }
 
     clearReaderDrawingSelection() {
+        this.cancelReaderDrawingDrag();
         this.readerSelectedDrawingId = null;
         this.syncReaderDrawingSelectionUi();
     }
@@ -789,8 +811,370 @@ class App {
         this.syncReaderDrawingSelectionUi();
     }
 
-    cloneReaderDrawingNote(note = {}) {
-        return JSON.parse(JSON.stringify(note || {}));
+    // ─── Selection overlay ───────────────────────────────────────────────────
+
+    buildReaderDrawingSelectionOverlay(note) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const pad = 10; // SVG-unit padding around the bounding box
+        const ax = (note.anchorX || 0) * 1000;
+        const ay = (note.anchorY || 0) * 1000;
+        const aw = (note.anchorWidth || 0) * 1000;
+        const ah = (note.anchorHeight || 0) * 1000;
+        const bx = ax - pad;
+        const by = ay - pad;
+        const bw = aw + pad * 2;
+        const bh = ah + pad * 2;
+        const cx = bx + bw / 2;
+        const cy = by + bh / 2;
+        const hs = 9; // half-size of resize handle squares
+
+        const g = document.createElementNS(ns, 'g');
+        g.setAttribute('class', 'reader-drawing-selection-overlay');
+        g.setAttribute('data-note-id', note.id);
+
+        const transform = this.getReaderFileDrawingTransformValue(note);
+        if (transform) g.setAttribute('transform', transform);
+
+        // Dashed bounding rect (also serves as move drag target)
+        const rect = document.createElementNS(ns, 'rect');
+        rect.setAttribute('class', 'reader-drawing-bbox-rect');
+        rect.setAttribute('x', bx);
+        rect.setAttribute('y', by);
+        rect.setAttribute('width', bw);
+        rect.setAttribute('height', bh);
+        g.appendChild(rect);
+
+        // Rotate stem (line from top-center to rotate handle)
+        const stem = document.createElementNS(ns, 'line');
+        stem.setAttribute('class', 'reader-drawing-rotate-stem');
+        stem.setAttribute('x1', cx);
+        stem.setAttribute('y1', by);
+        stem.setAttribute('x2', cx);
+        stem.setAttribute('y2', by - 40);
+        g.appendChild(stem);
+
+        // Rotate handle (circle above top-center)
+        const rotHandle = document.createElementNS(ns, 'circle');
+        rotHandle.setAttribute('class', 'reader-drawing-rotate-handle');
+        rotHandle.setAttribute('cx', cx);
+        rotHandle.setAttribute('cy', by - 52);
+        rotHandle.setAttribute('r', 12);
+        rotHandle.setAttribute('data-handle', 'rotate');
+        g.appendChild(rotHandle);
+
+        // 8 resize handles
+        const handlePositions = [
+            { id: 'nw', hx: bx,      hy: by      },
+            { id: 'n',  hx: cx,      hy: by      },
+            { id: 'ne', hx: bx + bw, hy: by      },
+            { id: 'e',  hx: bx + bw, hy: cy      },
+            { id: 'se', hx: bx + bw, hy: by + bh },
+            { id: 's',  hx: cx,      hy: by + bh },
+            { id: 'sw', hx: bx,      hy: by + bh },
+            { id: 'w',  hx: bx,      hy: cy      },
+        ];
+        handlePositions.forEach(({ id, hx, hy }) => {
+            const h = document.createElementNS(ns, 'rect');
+            h.setAttribute('class', 'reader-drawing-resize-handle');
+            h.setAttribute('x', hx - hs);
+            h.setAttribute('y', hy - hs);
+            h.setAttribute('width', hs * 2);
+            h.setAttribute('height', hs * 2);
+            h.setAttribute('data-handle', id);
+            g.appendChild(h);
+        });
+
+        return g;
+    }
+
+    updateSelectionOverlayInLayer(layer, note) {
+        const existing = layer.querySelector(`.reader-drawing-selection-overlay[data-note-id="${note.id}"]`);
+        if (existing) existing.remove();
+        layer.appendChild(this.buildReaderDrawingSelectionOverlay(note));
+    }
+
+    // ─── Geometry scaling for resize ─────────────────────────────────────────
+
+    getScaledReaderDrawingNote(origNote, newAx, newAy, newAw, newAh) {
+        const clone = this.cloneReaderDrawingNote(origNote);
+        const origAx = origNote.anchorX || 0;
+        const origAy = origNote.anchorY || 0;
+        const origAw = origNote.anchorWidth || 0;
+        const origAh = origNote.anchorHeight || 0;
+        const dd = clone.drawingData || {};
+        const scaleX = origAw > 0.001 ? newAw / origAw : 1;
+        const scaleY = origAh > 0.001 ? newAh / origAh : 1;
+
+        if (clone.drawingTool === 'pen') {
+            dd.points = this.getReaderFileDrawingPoints(dd.points).map(p => ({
+                x: this.clampNumber(newAx + (p.x - origAx) * scaleX, 0, 1),
+                y: this.clampNumber(newAy + (p.y - origAy) * scaleY, 0, 1)
+            }));
+            const bounds = this.getReaderFileDrawingBoundsFromPoints(dd.points);
+            clone.anchorX = bounds.anchorX;
+            clone.anchorY = bounds.anchorY;
+            clone.anchorWidth = bounds.anchorWidth;
+            clone.anchorHeight = bounds.anchorHeight;
+        } else if (clone.drawingTool === 'line' || clone.drawingTool === 'arrow') {
+            dd.startX = this.clampNumber(newAx + ((dd.startX || 0) - origAx) * scaleX, 0, 1);
+            dd.startY = this.clampNumber(newAy + ((dd.startY || 0) - origAy) * scaleY, 0, 1);
+            dd.endX   = this.clampNumber(newAx + ((dd.endX   || 0) - origAx) * scaleX, 0, 1);
+            dd.endY   = this.clampNumber(newAy + ((dd.endY   || 0) - origAy) * scaleY, 0, 1);
+            clone.anchorX = newAx; clone.anchorY = newAy;
+            clone.anchorWidth = newAw; clone.anchorHeight = newAh;
+        } else if (clone.drawingTool === 'circle') {
+            dd.centerX = this.clampNumber(newAx + ((dd.centerX || 0) - origAx) * scaleX, 0, 1);
+            dd.centerY = this.clampNumber(newAy + ((dd.centerY || 0) - origAy) * scaleY, 0, 1);
+            dd.radiusX = this.clampNumber((dd.radiusX || 0) * scaleX, 0, 0.5);
+            dd.radiusY = this.clampNumber((dd.radiusY || 0) * scaleY, 0, 0.5);
+            clone.anchorX = this.clampNumber(dd.centerX - dd.radiusX, 0, 1);
+            clone.anchorY = this.clampNumber(dd.centerY - dd.radiusY, 0, 1);
+            clone.anchorWidth  = dd.radiusX * 2;
+            clone.anchorHeight = dd.radiusY * 2;
+        }
+        clone.drawingData = dd;
+        return clone;
+    }
+
+    // Compute new bounding box (normalized 0-1) given a resize handle drag
+    getResizedBoundingBox(origAx, origAy, origAw, origAh, handle, curX, curY) {
+        const minSize = 0.02;
+        const right  = origAx + origAw;
+        const bottom = origAy + origAh;
+        let ax = origAx, ay = origAy, aw = origAw, ah = origAh;
+
+        if (handle === 'nw') { ax = curX; ay = curY; aw = right - curX;  ah = bottom - curY; }
+        else if (handle === 'n')  { ay = curY; ah = bottom - curY; }
+        else if (handle === 'ne') { ay = curY; aw = curX - origAx; ah = bottom - curY; }
+        else if (handle === 'e')  { aw = curX - origAx; }
+        else if (handle === 'se') { aw = curX - origAx; ah = curY - origAy; }
+        else if (handle === 's')  { ah = curY - origAy; }
+        else if (handle === 'sw') { ax = curX; aw = right - curX;  ah = curY - origAy; }
+        else if (handle === 'w')  { ax = curX; aw = right - curX; }
+
+        aw = Math.max(minSize, aw);
+        ah = Math.max(minSize, ah);
+        ax = this.clampNumber(ax, 0, 1 - minSize);
+        ay = this.clampNumber(ay, 0, 1 - minSize);
+
+        return { ax, ay, aw, ah };
+    }
+
+    // Transform normalized coords from SVG (world) space to note's local pre-rotation space
+    toNoteLocalNormCoord(normX, normY, note) {
+        const rotation = this.getReaderFileDrawingRotation(note);
+        if (!rotation) return { x: normX, y: normY };
+        const center = this.getReaderDrawingRotationCenter(note);
+        const cx = center.x, cy = center.y;
+        const rad = -rotation * Math.PI / 180; // inverse rotation
+        const dx = normX - cx, dy = normY - cy;
+        return {
+            x: cx + dx * Math.cos(rad) - dy * Math.sin(rad),
+            y: cy + dx * Math.sin(rad) + dy * Math.cos(rad)
+        };
+    }
+
+    // Update SVG shape element attributes directly (for live drag preview)
+    updateShapeElement(element, note) {
+        if (!(element instanceof SVGElement) || !this.isDrawingReadingNote(note)) return;
+        const dd = note.drawingData || {};
+        if (note.drawingTool === 'pen') {
+            const pts = this.getReaderFileDrawingPoints(dd.points);
+            element.setAttribute('points', pts.map(p => `${this.toReaderFileSvgCoord(p.x)},${this.toReaderFileSvgCoord(p.y)}`).join(' '));
+        } else if (note.drawingTool === 'line') {
+            element.setAttribute('x1', this.toReaderFileSvgCoord(dd.startX));
+            element.setAttribute('y1', this.toReaderFileSvgCoord(dd.startY));
+            element.setAttribute('x2', this.toReaderFileSvgCoord(dd.endX));
+            element.setAttribute('y2', this.toReaderFileSvgCoord(dd.endY));
+        } else if (note.drawingTool === 'arrow') {
+            element.setAttribute('d', this.getReaderFileArrowPath(dd.startX, dd.startY, dd.endX, dd.endY));
+        } else if (note.drawingTool === 'circle') {
+            element.setAttribute('cx', this.toReaderFileSvgCoord(dd.centerX));
+            element.setAttribute('cy', this.toReaderFileSvgCoord(dd.centerY));
+            element.setAttribute('rx', this.toReaderFileSvgCoord(dd.radiusX));
+            element.setAttribute('ry', this.toReaderFileSvgCoord(dd.radiusY));
+        }
+    }
+
+    // Live-update the drawing group DOM to reflect the provided note state
+    applyNoteToDrawingGroupDom(layer, noteId, note) {
+        const group = layer.querySelector(`.reader-file-drawing-group[data-note-id="${noteId}"]`);
+        if (!(group instanceof SVGGElement)) return;
+        const transform = this.getReaderFileDrawingTransformValue(note);
+        if (transform) group.setAttribute('transform', transform);
+        else group.removeAttribute('transform');
+        this.updateShapeElement(group.querySelector('.reader-file-drawing-hitarea'), note);
+        this.updateShapeElement(group.querySelector('.reader-file-drawing'), note);
+        const selOutline = group.querySelector('.reader-file-drawing-selection');
+        if (selOutline) this.updateShapeElement(selOutline, note);
+    }
+
+    // ─── Drag manipulation (move / resize / rotate) ──────────────────────────
+
+    beginReaderDrawingManipulation(event) {
+        if (event.button !== 0) return;
+        if (!Number.isFinite(this.readerSelectedDrawingId)) return;
+
+        const target = event.target instanceof SVGElement ? event.target : null;
+        if (!target) return;
+
+        const layer = event.currentTarget;
+        if (!(layer instanceof SVGSVGElement)) return;
+
+        const noteId = this.readerSelectedDrawingId;
+        const origNote = (this._readerDrawingNotesCache || []).find(n => n.id === noteId);
+        if (!origNote) return;
+
+        const layerRect = layer.getBoundingClientRect();
+        if (!layerRect.width || !layerRect.height) return;
+
+        const startNormX = (event.clientX - layerRect.left) / layerRect.width;
+        const startNormY = (event.clientY - layerRect.top)  / layerRect.height;
+
+        const resizeHandle = target.closest('.reader-drawing-resize-handle[data-handle]');
+        const rotateHandle = target.closest('.reader-drawing-rotate-handle');
+        const bboxRect     = target.closest('.reader-drawing-bbox-rect');
+
+        let type = null;
+        let handle = null;
+        if (resizeHandle) { type = 'resize'; handle = resizeHandle.dataset.handle; }
+        else if (rotateHandle) { type = 'rotate'; }
+        else if (bboxRect) { type = 'move'; }
+
+        if (!type) return;
+
+        this._readerDrawingDragState = {
+            type,
+            handle,
+            pointerId: event.pointerId,
+            layer,
+            noteId,
+            origNote: this.cloneReaderDrawingNote(origNote),
+            startNormX,
+            startNormY,
+            origGroupTransform:   layer.querySelector(`.reader-file-drawing-group[data-note-id="${noteId}"]`)?.getAttribute('transform') || '',
+            origOverlayTransform: layer.querySelector(`.reader-drawing-selection-overlay[data-note-id="${noteId}"]`)?.getAttribute('transform') || '',
+            origRotation: this.getReaderFileDrawingRotation(origNote),
+            rotCenter: this.getReaderDrawingRotationCenter(origNote),
+            moved: false,
+        };
+
+        layer.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    updateReaderDrawingDrag(event) {
+        const state = this._readerDrawingDragState;
+        if (!state || state.pointerId !== event.pointerId) return;
+
+        const layerRect = state.layer.getBoundingClientRect();
+        if (!layerRect.width || !layerRect.height) return;
+
+        const curNormX = (event.clientX - layerRect.left) / layerRect.width;
+        const curNormY = (event.clientY - layerRect.top)  / layerRect.height;
+        const dx = curNormX - state.startNormX;
+        const dy = curNormY - state.startNormY;
+
+        if (Math.abs(dx) > 0.003 || Math.abs(dy) > 0.003) state.moved = true;
+        if (!state.moved) return;
+
+        if (state.type === 'move') {
+            const dxSvg = dx * 1000;
+            const dySvg = dy * 1000;
+            const group = state.layer.querySelector(`.reader-file-drawing-group[data-note-id="${state.noteId}"]`);
+            if (group) {
+                const t = state.origGroupTransform ? `translate(${dxSvg} ${dySvg}) ${state.origGroupTransform}` : `translate(${dxSvg} ${dySvg})`;
+                group.setAttribute('transform', t);
+            }
+            const overlay = state.layer.querySelector(`.reader-drawing-selection-overlay[data-note-id="${state.noteId}"]`);
+            if (overlay) {
+                const t = state.origOverlayTransform ? `translate(${dxSvg} ${dySvg}) ${state.origOverlayTransform}` : `translate(${dxSvg} ${dySvg})`;
+                overlay.setAttribute('transform', t);
+            }
+
+        } else if (state.type === 'resize') {
+            // Transform pointer to note's local pre-rotation space
+            const local = this.toNoteLocalNormCoord(curNormX, curNormY, state.origNote);
+            const { ax, ay, aw, ah } = this.getResizedBoundingBox(
+                state.origNote.anchorX || 0, state.origNote.anchorY || 0,
+                state.origNote.anchorWidth || 0, state.origNote.anchorHeight || 0,
+                state.handle, local.x, local.y
+            );
+            const workingNote = this.getScaledReaderDrawingNote(state.origNote, ax, ay, aw, ah);
+            this.applyNoteToDrawingGroupDom(state.layer, state.noteId, workingNote);
+            this.updateSelectionOverlayInLayer(state.layer, workingNote);
+            state._workingNote = workingNote;
+
+        } else if (state.type === 'rotate') {
+            const cx = state.rotCenter.x;
+            const cy = state.rotCenter.y;
+            const angle = Math.atan2(curNormY - cy, curNormX - cx) * 180 / Math.PI;
+            // Convert angle so that dragging "up" from top gives 0° (adjust by +90°)
+            const newRotation = this.normalizeReaderFileDrawingRotation(angle + 90);
+            const workingNote = this.cloneReaderDrawingNote(state.origNote);
+            workingNote.drawingData = workingNote.drawingData || {};
+            workingNote.drawingData.rotation = newRotation;
+            const group = state.layer.querySelector(`.reader-file-drawing-group[data-note-id="${state.noteId}"]`);
+            if (group) {
+                const t = this.getReaderFileDrawingTransformValue(workingNote);
+                if (t) group.setAttribute('transform', t);
+                else group.removeAttribute('transform');
+            }
+            const overlay = state.layer.querySelector(`.reader-drawing-selection-overlay[data-note-id="${state.noteId}"]`);
+            if (overlay) {
+                const t = this.getReaderFileDrawingTransformValue(workingNote);
+                if (t) overlay.setAttribute('transform', t);
+                else overlay.removeAttribute('transform');
+            }
+            state._workingNote = workingNote;
+        }
+
+        event.preventDefault();
+    }
+
+    async completeReaderDrawingDrag(event) {
+        const state = this._readerDrawingDragState;
+        if (!state || state.pointerId !== event.pointerId) return;
+        this._readerDrawingDragState = null;
+
+        try { state.layer.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+
+        if (!state.moved) return; // was just a click — let click handler run normally
+
+        let finalNote = null;
+
+        if (state.type === 'move') {
+            const layerRect = state.layer.getBoundingClientRect();
+            if (layerRect.width && layerRect.height) {
+                const curNormX = (event.clientX - layerRect.left) / layerRect.width;
+                const curNormY = (event.clientY - layerRect.top)  / layerRect.height;
+                const dx = curNormX - state.startNormX;
+                const dy = curNormY - state.startNormY;
+                finalNote = this.getTranslatedReaderDrawingNote(state.origNote, dx, dy);
+            }
+        } else if (state.type === 'resize' || state.type === 'rotate') {
+            finalNote = state._workingNote || null;
+        }
+
+        if (!finalNote || !Number.isFinite(state.origNote.id)) return;
+
+        finalNote.id = state.origNote.id;
+        finalNote.updatedAt = Date.now();
+        await this.db.updateReadingNote({ ...state.origNote, ...finalNote });
+        await this.refreshReaderFileDrawings();
+        this.scheduleAutoBackup('drawing annotation move/resize/rotate');
+    }
+
+    cancelReaderDrawingDrag() {
+        const state = this._readerDrawingDragState;
+        if (!state) return;
+        this._readerDrawingDragState = null;
+        // Restore the drawing group to its original state
+        this.applyNoteToDrawingGroupDom(state.layer, state.noteId, state.origNote);
+        // Restore the selection overlay
+        this.updateSelectionOverlayInLayer(state.layer, state.origNote);
+        try { state.layer.releasePointerCapture(state.pointerId); } catch { /* ignore */ }
     }
 
     canPasteReaderDrawing() {
@@ -4533,12 +4917,16 @@ class App {
         return '';
     }
 
-    getReaderFileDrawingTransformAttr(note = {}) {
+    getReaderFileDrawingTransformValue(note = {}) {
         const rotation = this.getReaderFileDrawingRotation(note);
         if (!rotation) return '';
-
         const center = this.getReaderDrawingRotationCenter(note);
-        return ` transform="rotate(${rotation} ${this.toReaderFileSvgCoord(center.x)} ${this.toReaderFileSvgCoord(center.y)})"`;
+        return `rotate(${rotation} ${this.toReaderFileSvgCoord(center.x)} ${this.toReaderFileSvgCoord(center.y)})`;
+    }
+
+    getReaderFileDrawingTransformAttr(note = {}) {
+        const transform = this.getReaderFileDrawingTransformValue(note);
+        return transform ? ` transform="${transform}"` : '';
     }
 
     renderReaderFileDrawing(note) {
@@ -4598,6 +4986,7 @@ class App {
         if (this.readerSelectedDrawingId && !drawings.some(note => note.id === this.readerSelectedDrawingId)) {
             this.readerSelectedDrawingId = null;
         }
+        this._readerDrawingNotesCache = drawings;
         document.querySelectorAll('.reader-file-drawing-layer').forEach(layer => {
             const host = layer.closest('.reader-file-note-host');
             layer.innerHTML = this.renderReaderFileDrawings(this.getReaderFileDrawingsForHost(drawings, host));
@@ -4683,6 +5072,10 @@ class App {
         }
 
         if (!(target instanceof Element)) {
+            // Don't deselect when clicking on the selection overlay (handles, bbox rect)
+            if (event.target instanceof Element && event.target.closest('.reader-drawing-selection-overlay')) {
+                return;
+            }
             if (!this.readerFileNoteMode && this.readerSelectedDrawingId) {
                 this.clearReaderDrawingSelection();
             }
@@ -5345,9 +5738,28 @@ class App {
                 this.clearReaderFileHighlightSelection(true);
                 this.clearReaderFileSketchSelection(true);
             });
-            host.querySelector('.reader-file-drawing-layer')?.addEventListener('click', (event) => {
-                void this.handleReaderFileDrawingClick(event);
-            });
+
+            const drawingLayer = host.querySelector('.reader-file-drawing-layer');
+            if (drawingLayer) {
+                drawingLayer.addEventListener('click', (event) => {
+                    void this.handleReaderFileDrawingClick(event);
+                });
+                // Drag manipulation: move, resize, rotate
+                drawingLayer.addEventListener('pointerdown', (event) => {
+                    if (!this.readerFileNoteMode) {
+                        this.beginReaderDrawingManipulation(event);
+                    }
+                });
+                drawingLayer.addEventListener('pointermove', (event) => {
+                    this.updateReaderDrawingDrag(event);
+                });
+                drawingLayer.addEventListener('pointerup', (event) => {
+                    void this.completeReaderDrawingDrag(event);
+                });
+                drawingLayer.addEventListener('pointercancel', () => {
+                    this.cancelReaderDrawingDrag();
+                });
+            }
         });
     }
 

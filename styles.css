@@ -936,6 +936,47 @@ nav { flex: 1; padding: 12px 0; }
 .reader-file-drawing-group-selected .reader-file-drawing {
     filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.28));
 }
+
+/* Drawing object selection overlay */
+.reader-drawing-bbox-rect {
+    fill: rgba(0, 120, 255, 0.04);
+    stroke: var(--border-focus, #0078d4);
+    stroke-width: 1.5;
+    stroke-dasharray: 5 3;
+    pointer-events: fill;
+    cursor: move;
+    vector-effect: non-scaling-stroke;
+}
+.reader-drawing-resize-handle {
+    fill: #fff;
+    stroke: var(--border-focus, #0078d4);
+    stroke-width: 1.5;
+    pointer-events: all;
+    vector-effect: non-scaling-stroke;
+}
+.reader-drawing-resize-handle[data-handle="nw"],
+.reader-drawing-resize-handle[data-handle="se"] { cursor: nwse-resize; }
+.reader-drawing-resize-handle[data-handle="ne"],
+.reader-drawing-resize-handle[data-handle="sw"] { cursor: nesw-resize; }
+.reader-drawing-resize-handle[data-handle="n"],
+.reader-drawing-resize-handle[data-handle="s"]  { cursor: ns-resize; }
+.reader-drawing-resize-handle[data-handle="e"],
+.reader-drawing-resize-handle[data-handle="w"]  { cursor: ew-resize; }
+.reader-drawing-rotate-stem {
+    stroke: var(--border-focus, #0078d4);
+    stroke-width: 1.5;
+    pointer-events: none;
+    vector-effect: non-scaling-stroke;
+}
+.reader-drawing-rotate-handle {
+    fill: #fff;
+    stroke: var(--border-focus, #0078d4);
+    stroke-width: 1.5;
+    pointer-events: all;
+    cursor: grab;
+    vector-effect: non-scaling-stroke;
+}
+.reader-drawing-rotate-handle:active { cursor: grabbing; }
 .reader-file-note-box {
     position: absolute;
     border-radius: 10px;
