@@ -738,6 +738,74 @@ nav { flex: 1; padding: 12px 0; }
     gap: 10px;
     flex-wrap: wrap;
 }
+.reader-file-toolbar-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+}
+.reader-file-drawing-toolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+.reader-file-drawing-tools,
+.reader-file-drawing-widths,
+.reader-file-drawing-colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+.reader-file-drawing-width-btn {
+    min-width: 42px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 18px rgba(0,0,0,0.08);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.reader-file-drawing-width-btn:hover {
+    transform: translateY(-1px);
+}
+.reader-file-drawing-width-btn.active {
+    border-color: var(--border-focus);
+    background: rgba(88, 166, 255, 0.12);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12), 0 10px 18px rgba(0,0,0,0.14);
+}
+.reader-file-drawing-width-line {
+    width: 18px;
+    border-top: var(--reader-file-drawing-stroke-width, 6px) solid currentColor;
+    border-radius: 999px;
+}
+.reader-file-drawing-color-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    border: 1px solid var(--reader-file-drawing-color, var(--border-focus));
+    background: var(--bg-surface);
+    color: var(--reader-file-drawing-color, var(--border-focus));
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 18px rgba(0,0,0,0.08);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+.reader-file-drawing-color-btn:hover {
+    transform: translateY(-1px);
+}
+.reader-file-drawing-color-btn.active {
+    background: var(--reader-file-drawing-color, var(--border-focus));
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.14), 0 10px 18px rgba(0,0,0,0.14);
+}
 .reader-file-note-hint {
     font-size: 0.8rem;
     color: var(--text-secondary);
@@ -774,6 +842,11 @@ nav { flex: 1; padding: 12px 0; }
 .reader-file-note-host-highlight-mode {
     cursor: crosshair;
 }
+.reader-file-note-host-drawing-mode,
+.reader-file-note-host-eraser-mode {
+    cursor: crosshair;
+    touch-action: none;
+}
 .reader-file-note-host-highlight-mode {
     touch-action: none;
 }
@@ -781,6 +854,72 @@ nav { flex: 1; padding: 12px 0; }
     position: absolute;
     inset: 0;
     pointer-events: none;
+    overflow: hidden;
+}
+.reader-file-drawing-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+    overflow: visible;
+}
+.reader-file-drawing-group.note-color-yellow,
+.reader-file-drawing.note-color-yellow,
+.reader-file-drawing-preview.note-color-yellow {
+    color: var(--warning);
+}
+.reader-file-drawing-group.note-color-blue,
+.reader-file-drawing.note-color-blue,
+.reader-file-drawing-preview.note-color-blue {
+    color: var(--accent);
+}
+.reader-file-drawing-group.note-color-green,
+.reader-file-drawing.note-color-green,
+.reader-file-drawing-preview.note-color-green {
+    color: var(--success);
+}
+.reader-file-drawing-group.note-color-red,
+.reader-file-drawing.note-color-red,
+.reader-file-drawing-preview.note-color-red {
+    color: var(--danger);
+}
+.reader-file-drawing,
+.reader-file-drawing-preview {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--reader-file-drawing-stroke-width, 6px);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+    filter: drop-shadow(0 2px 5px rgba(0,0,0,0.16));
+}
+.reader-file-drawing-hitarea {
+    fill: none;
+    stroke: transparent;
+    stroke-width: var(--reader-file-drawing-hit-width, 22px);
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+}
+.reader-file-note-host-eraser-mode .reader-file-drawing-hitarea {
+    pointer-events: stroke;
+    cursor: pointer;
+}
+.reader-file-note-host-eraser-mode .reader-file-drawing {
+    opacity: 0.72;
+}
+.reader-file-note-host-eraser-mode .reader-file-drawing-group:hover .reader-file-drawing {
+    color: var(--danger);
+    opacity: 1;
+}
+.reader-file-drawing-preview {
+    opacity: 0.82;
+    stroke-dasharray: 7 5;
+}
+.reader-file-drawing.reader-jump-target {
+    stroke-width: calc(var(--reader-file-drawing-stroke-width, 6px) + 3px);
+    filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.32));
 }
 .reader-file-note-box {
     position: absolute;
@@ -2098,8 +2237,18 @@ nav { flex: 1; padding: 12px 0; }
     .reader-file-toolbar {
         align-items: flex-start;
     }
+    .reader-file-toolbar-controls,
+    .reader-file-drawing-toolbar {
+        width: 100%;
+        align-items: flex-start;
+    }
     .reader-file-toolbar-actions {
         width: 100%;
+    }
+    .reader-file-drawing-tools,
+    .reader-file-drawing-widths,
+    .reader-file-drawing-colors {
+        justify-content: flex-start;
     }
     .reader-generic-embed-shell,
     .reader-generic-embed {

@@ -445,6 +445,81 @@ test('file-backed sources and file-region notes round-trip through backup export
     db.db.close();
 });
 
+test('drawing annotations round-trip through backup export and import', async () => {
+    const db = await freshDatabase();
+    const fileDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ';
+    const sourceId = await db.addSource({
+        title: 'Sketchable Image',
+        content: '',
+        sourceType: 'other',
+        language: 'Japanese',
+        documentKind: 'image',
+        fileName: 'sketch.png',
+        fileMimeType: 'image/png',
+        fileSize: 24,
+        fileDataUrl
+    });
+
+    await db.addReadingNote({
+        sourceId,
+        text: 'Arrow · Image',
+        note: '',
+        color: 'red',
+        anchorType: 'drawing',
+        pageNumber: null,
+        anchorX: 0.16,
+        anchorY: 0.22,
+        anchorWidth: 0.31,
+        anchorHeight: 0.17,
+        targetLabel: 'Image',
+        drawingTool: 'arrow',
+        drawingData: {
+            startX: 0.16,
+            startY: 0.24,
+            endX: 0.47,
+            endY: 0.39,
+            strokeWidth: 10
+        }
+    });
+
+    const exported = await db.exportAll();
+    const exportedDrawing = exported.readingNotes.find(note => note.anchorType === 'drawing');
+
+    assert.ok(exportedDrawing);
+    assert.equal(exportedDrawing.drawingTool, 'arrow');
+    assert.equal(exportedDrawing.targetLabel, 'Image');
+    assert.deepEqual(exportedDrawing.drawingData, {
+        startX: 0.16,
+        startY: 0.24,
+        endX: 0.47,
+        endY: 0.39,
+        strokeWidth: 10
+    });
+
+    await db.importAll(exported, { mode: 'replace' });
+
+    const restoredNotes = await db.getAllReadingNotes();
+    const restoredDrawing = restoredNotes.find(note => note.anchorType === 'drawing');
+
+    assert.ok(restoredDrawing);
+    assert.equal(restoredDrawing.drawingTool, 'arrow');
+    assert.equal(restoredDrawing.color, 'red');
+    assert.equal(restoredDrawing.anchorX, 0.16);
+    assert.equal(restoredDrawing.anchorY, 0.22);
+    assert.equal(restoredDrawing.anchorWidth, 0.31);
+    assert.equal(restoredDrawing.anchorHeight, 0.17);
+    assert.equal(restoredDrawing.targetLabel, 'Image');
+    assert.deepEqual(restoredDrawing.drawingData, {
+        startX: 0.16,
+        startY: 0.24,
+        endX: 0.47,
+        endY: 0.39,
+        strokeWidth: 10
+    });
+
+    db.db.close();
+});
+
 test('source content is normalized to LF on read and export', async () => {
     const db = await freshDatabase();
     const sourceId = await db.addSource({

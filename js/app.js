@@ -52,7 +52,10 @@ class App {
         this._readerJumpTarget = null;
         this._fileRenderToken = 0;
         this.readerFileNoteMode = '';
+        this.readerFileDrawingColor = localStorage.getItem('langlens-reader-drawing-color') || 'yellow';
+        this.readerFileDrawingWidth = this.normalizeReaderFileDrawingWidth(localStorage.getItem('langlens-reader-drawing-width'));
         this._readerFileDrawState = null;
+        this._readerFileSketchState = null;
         this.migrationNotice = null;
     }
 
@@ -657,6 +660,83 @@ class App {
 
     getReadingNoteColorMeta(color = 'yellow') {
         return this.getReadingNoteColors().find(entry => entry.value === color) || this.getReadingNoteColors()[0];
+    }
+
+    getReaderFileDrawingTools() {
+        return [
+            { value: 'pen', label: 'Pen', icon: '✏️' },
+            { value: 'line', label: 'Line', icon: '／' },
+            { value: 'arrow', label: 'Arrow', icon: '↗' },
+            { value: 'circle', label: 'Circle', icon: '◯' },
+            { value: 'eraser', label: 'Eraser', icon: '⌫' }
+        ];
+    }
+
+    getReaderFileDrawingToolMeta(tool = 'pen') {
+        return this.getReaderFileDrawingTools().find(entry => entry.value === tool) || this.getReaderFileDrawingTools()[0];
+    }
+
+    getReaderFileDrawingWidths() {
+        return [
+            { value: 3, label: 'Thin' },
+            { value: 6, label: 'Medium' },
+            { value: 10, label: 'Thick' }
+        ];
+    }
+
+    normalizeReaderFileDrawingWidth(value = 6) {
+        const numeric = Number.parseFloat(value);
+        return this.getReaderFileDrawingWidths().find(entry => entry.value === numeric)?.value || this.getReaderFileDrawingWidths()[1].value;
+    }
+
+    isReaderFileDrawingTool(tool = '') {
+        return this.getReaderFileDrawingTools().some(entry => entry.value === tool);
+    }
+
+    isDrawingReadingNote(note) {
+        return note?.anchorType === 'drawing'
+            && this.isReaderFileDrawingTool(note?.drawingTool)
+            && note?.drawingData
+            && typeof note.drawingData === 'object';
+    }
+
+    getVisibleReadingNotes(notes = []) {
+        return (Array.isArray(notes) ? notes : []).filter(note => !this.isDrawingReadingNote(note));
+    }
+
+    setReaderFileDrawingColor(color = 'yellow') {
+        const resolved = this.getReadingNoteColorMeta(color).value;
+        this.readerFileDrawingColor = resolved;
+        localStorage.setItem('langlens-reader-drawing-color', resolved);
+        return resolved;
+    }
+
+    setReaderFileDrawingWidth(width = 6) {
+        const resolved = this.normalizeReaderFileDrawingWidth(width);
+        this.readerFileDrawingWidth = resolved;
+        localStorage.setItem('langlens-reader-drawing-width', String(resolved));
+        return resolved;
+    }
+
+    getReaderFileDrawingStrokeWidth(source = null) {
+        return this.normalizeReaderFileDrawingWidth(source?.drawingData?.strokeWidth ?? source?.strokeWidth ?? this.readerFileDrawingWidth);
+    }
+
+    getReaderFileDrawingHitWidth(width = 6) {
+        return Math.max(18, this.normalizeReaderFileDrawingWidth(width) + 14);
+    }
+
+    getReaderFileDrawingStyleAttr(source = null) {
+        const strokeWidth = this.getReaderFileDrawingStrokeWidth(source);
+        const hitWidth = this.getReaderFileDrawingHitWidth(strokeWidth);
+        return ` style="--reader-file-drawing-stroke-width:${strokeWidth}px;--reader-file-drawing-hit-width:${hitWidth}px;"`;
+    }
+
+    applyReaderFileDrawingElementStyle(element, source = null) {
+        if (!(element instanceof SVGElement)) return;
+        const strokeWidth = this.getReaderFileDrawingStrokeWidth(source);
+        element.style.setProperty('--reader-file-drawing-stroke-width', `${strokeWidth}px`);
+        element.style.setProperty('--reader-file-drawing-hit-width', `${this.getReaderFileDrawingHitWidth(strokeWidth)}px`);
     }
 
     renderReadingNoteColorChips(selectedColor = 'yellow') {
@@ -1500,7 +1580,7 @@ class App {
             });
         }
 
-        for (const note of readingNotes) {
+        for (const note of this.getVisibleReadingNotes(readingNotes)) {
             const sourceLabel = note.sourceId ? (sourceMap[note.sourceId]?.title || 'Text') : 'Text';
             activities.push({
                 type: 'reading-note',
@@ -2949,13 +3029,14 @@ class App {
             this.db.getAllSources(),
             this.db.getAllReadingNotes()
         ]);
+        const visibleReadingNotes = this.getVisibleReadingNotes(readingNotes);
         const sourceMap = {};
         for (const source of sources) sourceMap[source.id] = source;
-        const recentActivity = this.buildRecentActivity(sources, items, readingNotes, sourceMap);
+        const recentActivity = this.buildRecentActivity(sources, items, visibleReadingNotes, sourceMap);
         const backupReminder = BackupUtils.getBackupReminder({
             totalSources: stats.totalSources,
             totalHighlights: stats.totalHighlights,
-            totalReadingNotes: readingNotes.length,
+            totalReadingNotes: visibleReadingNotes.length,
             lastBackupAt: this.backupState.lastBackupAt,
             thresholdMs: this.backupState.backupThresholdMs
         });
@@ -3540,7 +3621,7 @@ class App {
         if (Number.isFinite(target.highlightId)) {
             selector = `.reader-file-item-box[data-hl-id="${target.highlightId}"], .reader-file-item-marker[data-hl-id="${target.highlightId}"], .hl[data-hl-id="${target.highlightId}"]`;
         } else if (Number.isFinite(target.noteId)) {
-            selector = `.reader-file-note-box[data-note-id="${target.noteId}"], .reader-file-note-marker[data-note-id="${target.noteId}"], .hl-reading-note[data-note-id="${target.noteId}"]`;
+            selector = `.reader-file-note-box[data-note-id="${target.noteId}"], .reader-file-note-marker[data-note-id="${target.noteId}"], .reader-file-drawing-group[data-note-id="${target.noteId}"] .reader-file-drawing, .hl-reading-note[data-note-id="${target.noteId}"]`;
         }
 
         if (!selector) return false;
@@ -3591,10 +3672,12 @@ class App {
         if (!this.currentSource) return;
 
         const source = this.currentSource;
-        const [items, readingNotes] = await Promise.all([
+        const [items, allReadingNotes] = await Promise.all([
             this.db.getHighlightsBySource(source.id),
             this.db.getReadingNotesBySource(source.id)
         ]);
+        const drawingNotes = allReadingNotes.filter(note => this.isDrawingReadingNote(note));
+        const readingNotes = this.getVisibleReadingNotes(allReadingNotes);
         const usesFileViewer = this.sourceUsesFileViewer(source);
         const view = document.getElementById('view-reader');
         const sortedItems = [...items].sort((a, b) => {
@@ -3649,16 +3732,29 @@ class App {
                             </div>
                             ${this.sourceSupportsPinnedNotes(source)
                                 ? `
-                                    <div class="reader-file-toolbar-actions">
-                                        <button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>
-                                        <button class="btn btn-secondary btn-sm" id="reader-draw-file-highlight">🟨 Draw Highlight</button>
+                                    <div class="reader-file-toolbar-controls">
+                                        <div class="reader-file-toolbar-actions">
+                                            <button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>
+                                            <button class="btn btn-secondary btn-sm" id="reader-draw-file-highlight">🟨 Draw Highlight</button>
+                                        </div>
+                                        <div class="reader-file-drawing-toolbar">
+                                            <div class="reader-file-drawing-tools">
+                                                ${this.renderReaderFileDrawingToolButtons()}
+                                            </div>
+                                            <div class="reader-file-drawing-widths">
+                                                ${this.renderReaderFileDrawingWidthButtons()}
+                                            </div>
+                                            <div class="reader-file-drawing-colors">
+                                                ${this.renderReaderFileDrawingColorButtons()}
+                                            </div>
+                                        </div>
                                     </div>
                                 `
                                 : ''}
                         </div>
                         <div id="reader-file-note-hint" class="reader-file-note-hint">
                             ${this.sourceSupportsPinnedNotes(source)
-                                ? 'Pinned notes and highlight boxes stay attached to the same PDF page or image position.'
+                                ? 'Pinned notes, highlight boxes, and drawings stay attached to the same PDF page or image position.'
                                 : 'This stored file is included in local backups. Inline pins are available for images and PDFs.'}
                         </div>
                         <div id="reader-content" class="reader-content-file">
@@ -3767,11 +3863,13 @@ class App {
         this.hideSelectionToolbar();
         this.readerFileNoteMode = '';
         this.clearReaderFileHighlightSelection(true);
+        this.clearReaderFileSketchSelection(true);
 
         if (usesFileViewer) {
-            await this.renderStoredFileViewer(source, readingNotes, items);
+            await this.renderStoredFileViewer(source, readingNotes, items, drawingNotes);
             document.getElementById('reader-add-file-note')?.addEventListener('click', () => this.toggleReaderFileNoteMode('point'));
             document.getElementById('reader-draw-file-highlight')?.addEventListener('click', () => this.toggleReaderFileNoteMode('rect'));
+            this.bindReaderFileDrawingToolbar(view);
             this.updateReaderFileNoteModeUi();
         } else {
             view.querySelectorAll('.hl-reading-note[data-note-id]').forEach(span => {
@@ -3791,6 +3889,21 @@ class App {
 
     getReadingNoteLocationLabel(note, source = this.currentSource) {
         if (!note) return '';
+
+        if (this.isDrawingReadingNote(note)) {
+            const targetLabel = String(note.targetLabel || '').trim();
+            const toolLabel = this.getReaderFileDrawingToolMeta(note.drawingTool).label;
+            if (targetLabel) {
+                return `${targetLabel} ${toolLabel.toLowerCase()}`;
+            }
+            if (Number.isFinite(note.pageNumber)) {
+                return `Page ${note.pageNumber} ${toolLabel.toLowerCase()}`;
+            }
+            if (source?.documentKind === 'image') {
+                return `Image ${toolLabel.toLowerCase()}`;
+            }
+            return `${toolLabel} annotation`;
+        }
 
         if (note.anchorType === 'point') {
             if (String(note.targetLabel || '').trim()) {
@@ -3827,6 +3940,11 @@ class App {
 
     getReadingNoteDisplayText(note, source = this.currentSource) {
         if (!note) return '';
+
+        if (this.isDrawingReadingNote(note)) {
+            const title = String(note.text || '').trim();
+            return title || this.getReadingNoteLocationLabel(note, source) || 'Drawing annotation';
+        }
 
         if (note.anchorType === 'point' || note.anchorType === 'rect') {
             const title = String(note.text || '').trim();
@@ -3911,7 +4029,7 @@ class App {
     }
 
     isFileRegionReadingNote(note) {
-        return this.isPointReadingNote(note) || this.isRectReadingNote(note);
+        return this.isPointReadingNote(note) || this.isRectReadingNote(note) || this.isDrawingReadingNote(note);
     }
 
     canFocusReadingNote(note) {
@@ -4042,6 +4160,230 @@ class App {
         `;
     }
 
+    renderReaderFileDrawingToolButtons(activeTool = this.readerFileNoteMode) {
+        return this.getReaderFileDrawingTools().map(({ value, label, icon }) => `
+            <button
+                type="button"
+                class="btn ${activeTool === value ? 'btn-primary' : 'btn-secondary'} btn-sm"
+                data-reader-file-tool="${value}"
+                title="${this.esc(label)}"
+            >${icon} ${this.esc(label)}</button>
+        `).join('');
+    }
+
+    renderReaderFileDrawingColorButtons(selectedColor = this.readerFileDrawingColor) {
+        return this.getReadingNoteColors().map(({ value, label, icon, tone }) => `
+            <button
+                type="button"
+                class="reader-file-drawing-color-btn ${selectedColor === value ? 'active' : ''}"
+                data-reader-drawing-color="${value}"
+                style="--reader-file-drawing-color:var(--${tone});"
+                title="${this.esc(label)}"
+                aria-label="${this.esc(label)}"
+            >${icon}</button>
+        `).join('');
+    }
+
+    renderReaderFileDrawingWidthButtons(selectedWidth = this.readerFileDrawingWidth) {
+        return this.getReaderFileDrawingWidths().map(({ value, label }) => `
+            <button
+                type="button"
+                class="reader-file-drawing-width-btn ${selectedWidth === value ? 'active' : ''}"
+                data-reader-drawing-width="${value}"
+                title="${this.esc(label)}"
+                aria-label="${this.esc(label)}"
+            ><span class="reader-file-drawing-width-line" style="--reader-file-drawing-stroke-width:${value}px;"></span></button>
+        `).join('');
+    }
+
+    toReaderFileSvgCoord(value) {
+        return (this.clampNumber(value, 0, 1) * 1000).toFixed(2);
+    }
+
+    getReaderFileDrawingPoints(points = []) {
+        return (Array.isArray(points) ? points : []).map(point => ({
+            x: this.clampNumber(point?.x, 0, 1),
+            y: this.clampNumber(point?.y, 0, 1)
+        })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+    }
+
+    getReaderFileDrawingBoundsFromPoints(points = []) {
+        const normalizedPoints = this.getReaderFileDrawingPoints(points);
+        if (normalizedPoints.length === 0) {
+            return {
+                anchorX: 0,
+                anchorY: 0,
+                anchorWidth: 0,
+                anchorHeight: 0
+            };
+        }
+
+        const xValues = normalizedPoints.map(point => point.x);
+        const yValues = normalizedPoints.map(point => point.y);
+        const left = Math.min(...xValues);
+        const right = Math.max(...xValues);
+        const top = Math.min(...yValues);
+        const bottom = Math.max(...yValues);
+
+        return {
+            anchorX: left,
+            anchorY: top,
+            anchorWidth: Math.max(right - left, 0),
+            anchorHeight: Math.max(bottom - top, 0)
+        };
+    }
+
+    getReaderFileCircleGeometry(startX, startY, endX, endY, hostRect) {
+        if (!hostRect?.width || !hostRect?.height) {
+            return {
+                centerX: this.clampNumber(startX, 0, 1),
+                centerY: this.clampNumber(startY, 0, 1),
+                radiusX: 0,
+                radiusY: 0,
+                anchorX: this.clampNumber(startX, 0, 1),
+                anchorY: this.clampNumber(startY, 0, 1),
+                anchorWidth: 0,
+                anchorHeight: 0
+            };
+        }
+
+        const deltaXPx = (endX - startX) * hostRect.width;
+        const deltaYPx = (endY - startY) * hostRect.height;
+        const diameterPx = Math.min(Math.abs(deltaXPx), Math.abs(deltaYPx));
+        const signX = deltaXPx >= 0 ? 1 : -1;
+        const signY = deltaYPx >= 0 ? 1 : -1;
+        const radiusX = this.clampNumber((diameterPx / 2) / hostRect.width, 0, 0.5);
+        const radiusY = this.clampNumber((diameterPx / 2) / hostRect.height, 0, 0.5);
+        const centerX = this.clampNumber(startX + (signX * radiusX), 0, 1);
+        const centerY = this.clampNumber(startY + (signY * radiusY), 0, 1);
+
+        return {
+            centerX,
+            centerY,
+            radiusX,
+            radiusY,
+            anchorX: this.clampNumber(centerX - radiusX, 0, 1),
+            anchorY: this.clampNumber(centerY - radiusY, 0, 1),
+            anchorWidth: Math.max(radiusX * 2, 0),
+            anchorHeight: Math.max(radiusY * 2, 0)
+        };
+    }
+
+    getReaderFileArrowPath(startX, startY, endX, endY) {
+        const left = this.clampNumber(startX, 0, 1);
+        const top = this.clampNumber(startY, 0, 1);
+        const right = this.clampNumber(endX, 0, 1);
+        const bottom = this.clampNumber(endY, 0, 1);
+        const deltaX = right - left;
+        const deltaY = bottom - top;
+        const length = Math.hypot(deltaX, deltaY);
+
+        if (length <= 0.0001) {
+            return '';
+        }
+
+        const angle = Math.atan2(deltaY, deltaX);
+        const headLength = Math.min(0.045, Math.max(0.02, length * 0.18));
+        const headAngle = Math.PI / 7;
+        const headLeftX = right - (headLength * Math.cos(angle - headAngle));
+        const headLeftY = bottom - (headLength * Math.sin(angle - headAngle));
+        const headRightX = right - (headLength * Math.cos(angle + headAngle));
+        const headRightY = bottom - (headLength * Math.sin(angle + headAngle));
+
+        return `M ${this.toReaderFileSvgCoord(left)} ${this.toReaderFileSvgCoord(top)} L ${this.toReaderFileSvgCoord(right)} ${this.toReaderFileSvgCoord(bottom)} M ${this.toReaderFileSvgCoord(headLeftX)} ${this.toReaderFileSvgCoord(headLeftY)} L ${this.toReaderFileSvgCoord(right)} ${this.toReaderFileSvgCoord(bottom)} L ${this.toReaderFileSvgCoord(headRightX)} ${this.toReaderFileSvgCoord(headRightY)}`;
+    }
+
+    getReaderFileDrawingShapeMarkup(note, className = 'reader-file-drawing') {
+        if (!this.isDrawingReadingNote(note)) {
+            return '';
+        }
+
+        const drawingData = note.drawingData || {};
+
+        if (note.drawingTool === 'pen') {
+            const points = this.getReaderFileDrawingPoints(drawingData.points);
+            if (points.length < 2) return '';
+            return `<polyline class="${className}" points="${points.map(point => `${this.toReaderFileSvgCoord(point.x)},${this.toReaderFileSvgCoord(point.y)}`).join(' ')}"></polyline>`;
+        }
+
+        if (note.drawingTool === 'line') {
+            return `<line class="${className}" x1="${this.toReaderFileSvgCoord(drawingData.startX)}" y1="${this.toReaderFileSvgCoord(drawingData.startY)}" x2="${this.toReaderFileSvgCoord(drawingData.endX)}" y2="${this.toReaderFileSvgCoord(drawingData.endY)}"></line>`;
+        }
+
+        if (note.drawingTool === 'arrow') {
+            const path = this.getReaderFileArrowPath(drawingData.startX, drawingData.startY, drawingData.endX, drawingData.endY);
+            if (!path) return '';
+            return `<path class="${className}" d="${path}"></path>`;
+        }
+
+        if (note.drawingTool === 'circle') {
+            const centerX = this.clampNumber(drawingData.centerX, 0, 1);
+            const centerY = this.clampNumber(drawingData.centerY, 0, 1);
+            const radiusX = this.clampNumber(drawingData.radiusX, 0, 0.5);
+            const radiusY = this.clampNumber(drawingData.radiusY, 0, 0.5);
+            if (radiusX <= 0 || radiusY <= 0) return '';
+            return `<ellipse class="${className}" cx="${this.toReaderFileSvgCoord(centerX)}" cy="${this.toReaderFileSvgCoord(centerY)}" rx="${this.toReaderFileSvgCoord(radiusX)}" ry="${this.toReaderFileSvgCoord(radiusY)}"></ellipse>`;
+        }
+
+        return '';
+    }
+
+    renderReaderFileDrawing(note) {
+        if (!this.isDrawingReadingNote(note) || !Number.isFinite(note.id)) {
+            return '';
+        }
+
+        const colorMeta = this.getReadingNoteColorMeta(note.color || 'yellow');
+        const toolLabel = this.getReaderFileDrawingToolMeta(note.drawingTool).label;
+        const title = `${toolLabel} — ${this.getReadingNoteLocationLabel(note, this.currentSource) || this.getReadingNoteDisplayText(note, this.currentSource)}`.trim();
+        const hitArea = this.getReaderFileDrawingShapeMarkup(note, 'reader-file-drawing-hitarea');
+        const drawing = this.getReaderFileDrawingShapeMarkup(note, 'reader-file-drawing');
+
+        if (!drawing) return '';
+
+        return `
+            <g class="reader-file-drawing-group note-color-${colorMeta.value}" data-note-id="${note.id}" data-drawing-tool="${note.drawingTool}" title="${this.esc(title)}"${this.getReaderFileDrawingStyleAttr(note)}>
+                ${hitArea}
+                ${drawing}
+            </g>
+        `;
+    }
+
+    renderReaderFileDrawings(drawings = []) {
+        return (Array.isArray(drawings) ? drawings : []).map(note => this.renderReaderFileDrawing(note)).join('');
+    }
+
+    renderReaderFileDrawingLayer(drawings = []) {
+        return `
+            <svg class="reader-file-drawing-layer" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+                ${this.renderReaderFileDrawings(drawings)}
+            </svg>
+        `;
+    }
+
+    getReaderFileDrawingsForHost(drawings = [], host = null) {
+        if (!(host instanceof HTMLElement)) return [];
+        const pageNumber = Number.parseInt(host.dataset.pageNumber || '', 10);
+        if (Number.isFinite(pageNumber)) {
+            return drawings.filter(note => (note.pageNumber || 1) === pageNumber);
+        }
+        return drawings.filter(note => !Number.isFinite(note.pageNumber));
+    }
+
+    async refreshReaderFileDrawings() {
+        if (!this.currentSource || !this.sourceSupportsPinnedNotes(this.currentSource || {})) return;
+
+        const sourceId = this.currentSource.id;
+        const notes = await this.db.getReadingNotesBySource(sourceId);
+        if (this.currentSource?.id !== sourceId) return;
+
+        const drawings = notes.filter(note => this.isDrawingReadingNote(note));
+        document.querySelectorAll('.reader-file-drawing-layer').forEach(layer => {
+            const host = layer.closest('.reader-file-note-host');
+            layer.innerHTML = this.renderReaderFileDrawings(this.getReaderFileDrawingsForHost(drawings, host));
+        });
+    }
+
     bindReaderFileNoteMarkerClicks(scope = document) {
         scope.querySelectorAll('.reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id]').forEach(marker => {
             marker.addEventListener('click', (e) => {
@@ -4064,6 +4406,7 @@ class App {
         if (!this.sourceSupportsPinnedNotes(this.currentSource || {})) {
             this.readerFileNoteMode = '';
             this.clearReaderFileHighlightSelection(true);
+            this.clearReaderFileSketchSelection(true);
             this.updateReaderFileNoteModeUi();
             return;
         }
@@ -4078,6 +4421,10 @@ class App {
             this.clearReaderFileHighlightSelection(true);
         }
 
+        if (!this.isReaderFileDrawingTool(this.readerFileNoteMode) || this.readerFileNoteMode === 'eraser') {
+            this.clearReaderFileSketchSelection(true);
+        }
+
         this.updateReaderFileNoteModeUi();
     }
 
@@ -4086,6 +4433,7 @@ class App {
         const rectButton = document.getElementById('reader-draw-file-highlight');
         const hint = document.getElementById('reader-file-note-hint');
         const supportsPinnedNotes = this.sourceSupportsPinnedNotes(this.currentSource || {});
+        const drawingModeActive = this.isReaderFileDrawingTool(this.readerFileNoteMode) && this.readerFileNoteMode !== 'eraser';
 
         if (pointButton) {
             const pointActive = this.readerFileNoteMode === 'point';
@@ -4101,6 +4449,21 @@ class App {
             rectButton.classList.toggle('btn-secondary', !rectActive);
         }
 
+        document.querySelectorAll('[data-reader-file-tool]').forEach(button => {
+            const active = button.dataset.readerFileTool === this.readerFileNoteMode;
+            button.classList.toggle('btn-primary', active);
+            button.classList.toggle('btn-secondary', !active);
+        });
+
+        document.querySelectorAll('[data-reader-drawing-color]').forEach(button => {
+            button.classList.toggle('active', button.dataset.readerDrawingColor === this.readerFileDrawingColor);
+        });
+
+        document.querySelectorAll('[data-reader-drawing-width]').forEach(button => {
+            const width = this.normalizeReaderFileDrawingWidth(button.dataset.readerDrawingWidth);
+            button.classList.toggle('active', width === this.readerFileDrawingWidth);
+        });
+
         if (hint) {
             if (this.readerFileNoteMode === 'point') {
                 hint.textContent = this.currentSource?.documentKind === 'pdf'
@@ -4110,8 +4473,18 @@ class App {
                 hint.textContent = this.currentSource?.documentKind === 'pdf'
                     ? 'Drag on the PDF page to draw a highlight box, then add your note.'
                     : 'Drag on the image to draw a highlight box, then add your note.';
+            } else if (this.readerFileNoteMode === 'pen') {
+                hint.textContent = 'Draw freely on the page or image. The stroke saves automatically when you release.';
+            } else if (this.readerFileNoteMode === 'line') {
+                hint.textContent = 'Drag to place a straight line. The annotation saves automatically when you release.';
+            } else if (this.readerFileNoteMode === 'arrow') {
+                hint.textContent = 'Drag to place an arrow. The annotation saves automatically when you release.';
+            } else if (this.readerFileNoteMode === 'circle') {
+                hint.textContent = 'Drag diagonally to place a circle. The annotation saves automatically when you release.';
+            } else if (this.readerFileNoteMode === 'eraser') {
+                hint.textContent = 'Click an existing drawing to remove it.';
             } else if (supportsPinnedNotes) {
-                hint.textContent = 'Pinned notes and highlight boxes stay attached to the same PDF page or image position.';
+                hint.textContent = 'Pinned notes, highlight boxes, and drawings stay attached to the same PDF page or image position.';
             } else {
                 hint.textContent = 'This stored file is included in local backups. Inline pins are available for images and PDFs.';
             }
@@ -4120,7 +4493,302 @@ class App {
         document.querySelectorAll('.reader-file-note-host').forEach(host => {
             host.classList.toggle('reader-file-note-host-pin-mode', this.readerFileNoteMode === 'point');
             host.classList.toggle('reader-file-note-host-highlight-mode', this.readerFileNoteMode === 'rect');
+            host.classList.toggle('reader-file-note-host-drawing-mode', drawingModeActive);
+            host.classList.toggle('reader-file-note-host-eraser-mode', this.readerFileNoteMode === 'eraser');
         });
+    }
+
+    bindReaderFileDrawingToolbar(scope = document) {
+        scope.querySelectorAll('[data-reader-file-tool]').forEach(button => {
+            button.addEventListener('click', () => this.toggleReaderFileNoteMode(button.dataset.readerFileTool || 'pen'));
+        });
+
+        scope.querySelectorAll('[data-reader-drawing-color]').forEach(button => {
+            button.addEventListener('click', () => {
+                this.setReaderFileDrawingColor(button.dataset.readerDrawingColor || 'yellow');
+                this.updateReaderFileNoteModeUi();
+            });
+        });
+
+        scope.querySelectorAll('[data-reader-drawing-width]').forEach(button => {
+            button.addEventListener('click', () => {
+                this.setReaderFileDrawingWidth(button.dataset.readerDrawingWidth || 6);
+                this.updateReaderFileNoteModeUi();
+            });
+        });
+    }
+
+    createReaderFileSketchPreview(tool = 'pen', color = 'yellow', strokeWidth = 6) {
+        const ns = 'http://www.w3.org/2000/svg';
+        let preview;
+
+        if (tool === 'pen') {
+            preview = document.createElementNS(ns, 'polyline');
+        } else if (tool === 'line') {
+            preview = document.createElementNS(ns, 'line');
+        } else if (tool === 'arrow') {
+            preview = document.createElementNS(ns, 'path');
+        } else {
+            preview = document.createElementNS(ns, 'ellipse');
+        }
+
+        preview.setAttribute('class', `reader-file-drawing reader-file-drawing-preview note-color-${color}`);
+        this.applyReaderFileDrawingElementStyle(preview, { drawingData: { strokeWidth } });
+        return preview;
+    }
+
+    updateReaderFileSketchPreview(state) {
+        if (!state?.preview || !state.host) return;
+
+        const hostRect = state.host.getBoundingClientRect();
+        if (!hostRect.width || !hostRect.height) return;
+
+        if (state.tool === 'pen') {
+            const points = this.getReaderFileDrawingPoints(state.points);
+            state.preview.setAttribute('points', points.map(point => `${this.toReaderFileSvgCoord(point.x)},${this.toReaderFileSvgCoord(point.y)}`).join(' '));
+            return;
+        }
+
+        if (state.tool === 'line') {
+            state.preview.setAttribute('x1', this.toReaderFileSvgCoord(state.startX));
+            state.preview.setAttribute('y1', this.toReaderFileSvgCoord(state.startY));
+            state.preview.setAttribute('x2', this.toReaderFileSvgCoord(state.endX));
+            state.preview.setAttribute('y2', this.toReaderFileSvgCoord(state.endY));
+            return;
+        }
+
+        if (state.tool === 'arrow') {
+            state.preview.setAttribute('d', this.getReaderFileArrowPath(state.startX, state.startY, state.endX, state.endY));
+            return;
+        }
+
+        const circle = this.getReaderFileCircleGeometry(state.startX, state.startY, state.endX, state.endY, hostRect);
+        state.preview.setAttribute('cx', this.toReaderFileSvgCoord(circle.centerX));
+        state.preview.setAttribute('cy', this.toReaderFileSvgCoord(circle.centerY));
+        state.preview.setAttribute('rx', this.toReaderFileSvgCoord(circle.radiusX));
+        state.preview.setAttribute('ry', this.toReaderFileSvgCoord(circle.radiusY));
+    }
+
+    measureReaderFileSketchLength(points = [], hostRect) {
+        if (!hostRect?.width || !hostRect?.height) return 0;
+
+        let total = 0;
+        for (let index = 1; index < points.length; index++) {
+            const previous = points[index - 1];
+            const current = points[index];
+            total += Math.hypot(
+                (current.x - previous.x) * hostRect.width,
+                (current.y - previous.y) * hostRect.height
+            );
+        }
+        return total;
+    }
+
+    buildReaderFileSketchPayload(state) {
+        if (!state?.host || !this.currentSource) return null;
+
+        const hostRect = state.host.getBoundingClientRect();
+        if (!hostRect.width || !hostRect.height) return null;
+
+        const toolMeta = this.getReaderFileDrawingToolMeta(state.tool);
+        const basePayload = {
+            sourceId: this.currentSource.id,
+            text: `${toolMeta.label} · ${state.targetLabel}`,
+            note: '',
+            color: state.color,
+            anchorType: 'drawing',
+            pageNumber: state.pageNumber,
+            targetLabel: state.targetLabel,
+            drawingTool: state.tool
+        };
+
+        if (state.tool === 'pen') {
+            const points = this.getReaderFileDrawingPoints(state.points);
+            if (points.length < 2 || this.measureReaderFileSketchLength(points, hostRect) < 12) {
+                return null;
+            }
+
+            return {
+                ...basePayload,
+                ...this.getReaderFileDrawingBoundsFromPoints(points),
+                drawingData: {
+                    points,
+                    strokeWidth: state.strokeWidth
+                }
+            };
+        }
+
+        if (state.tool === 'line' || state.tool === 'arrow') {
+            const startX = this.clampNumber(state.startX, 0, 1);
+            const startY = this.clampNumber(state.startY, 0, 1);
+            const endX = this.clampNumber(state.endX, 0, 1);
+            const endY = this.clampNumber(state.endY, 0, 1);
+            if (Math.hypot((endX - startX) * hostRect.width, (endY - startY) * hostRect.height) < 12) {
+                return null;
+            }
+
+            return {
+                ...basePayload,
+                ...this.normalizeReaderFileRect(startX, startY, endX, endY),
+                drawingData: {
+                    startX,
+                    startY,
+                    endX,
+                    endY,
+                    strokeWidth: state.strokeWidth
+                }
+            };
+        }
+
+        const circle = this.getReaderFileCircleGeometry(state.startX, state.startY, state.endX, state.endY, hostRect);
+        if (Math.max(circle.radiusX * hostRect.width * 2, circle.radiusY * hostRect.height * 2) < 12) {
+            return null;
+        }
+
+        return {
+            ...basePayload,
+            anchorX: circle.anchorX,
+            anchorY: circle.anchorY,
+            anchorWidth: circle.anchorWidth,
+            anchorHeight: circle.anchorHeight,
+            drawingData: {
+                centerX: circle.centerX,
+                centerY: circle.centerY,
+                radiusX: circle.radiusX,
+                radiusY: circle.radiusY,
+                strokeWidth: state.strokeWidth
+            }
+        };
+    }
+
+    beginReaderFileSketchSelection(event) {
+        if (!this.currentSource || !this.isReaderFileDrawingTool(this.readerFileNoteMode) || this.readerFileNoteMode === 'eraser') return;
+        if (event.button !== 0) return;
+
+        const host = event.currentTarget;
+        if (!(host instanceof HTMLElement)) return;
+
+        const layer = host.querySelector('.reader-file-drawing-layer');
+        if (!(layer instanceof SVGSVGElement)) return;
+
+        const rect = host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+
+        const startX = this.clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+        const startY = this.clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+        const pageNumber = Number.parseInt(host.dataset.pageNumber || '', 10);
+        const targetLabel = String(host.dataset.noteTarget || '').trim()
+            || (Number.isFinite(pageNumber) ? `Page ${pageNumber}` : this.getSourceDocumentKindLabel(this.currentSource.documentKind));
+
+        this.clearReaderFileSketchSelection(true);
+
+        const preview = this.createReaderFileSketchPreview(this.readerFileNoteMode, this.readerFileDrawingColor, this.readerFileDrawingWidth);
+        layer.append(preview);
+
+        this._readerFileSketchState = {
+            host,
+            layer,
+            preview,
+            pointerId: event.pointerId,
+            tool: this.readerFileNoteMode,
+            color: this.readerFileDrawingColor,
+            strokeWidth: this.readerFileDrawingWidth,
+            pageNumber: Number.isFinite(pageNumber) ? pageNumber : null,
+            targetLabel,
+            startX,
+            startY,
+            endX: startX,
+            endY: startY,
+            points: [{ x: startX, y: startY }]
+        };
+
+        host.setPointerCapture?.(event.pointerId);
+        this.updateReaderFileSketchPreview(this._readerFileSketchState);
+        event.preventDefault();
+    }
+
+    updateReaderFileSketchSelection(event) {
+        const state = this._readerFileSketchState;
+        if (!state || state.host !== event.currentTarget || state.pointerId !== event.pointerId) return;
+
+        const rect = state.host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+
+        state.endX = this.clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+        state.endY = this.clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+
+        if (state.tool === 'pen') {
+            const previous = state.points[state.points.length - 1];
+            if (!previous || Math.hypot((state.endX - previous.x) * rect.width, (state.endY - previous.y) * rect.height) >= 3) {
+                state.points.push({ x: state.endX, y: state.endY });
+            }
+        }
+
+        this.updateReaderFileSketchPreview(state);
+    }
+
+    clearReaderFileSketchSelection(preserveMode = false) {
+        const state = this._readerFileSketchState;
+        if (!state) return;
+
+        if (state.preview?.remove) {
+            state.preview.remove();
+        }
+
+        try {
+            if (state.host?.releasePointerCapture && state.host.hasPointerCapture?.(state.pointerId)) {
+                state.host.releasePointerCapture(state.pointerId);
+            }
+        } catch {
+            // Ignore pointer-capture cleanup failures when the browser already released it.
+        }
+
+        this._readerFileSketchState = null;
+
+        if (!preserveMode && this.isReaderFileDrawingTool(this.readerFileNoteMode)) {
+            this.readerFileNoteMode = '';
+            this.updateReaderFileNoteModeUi();
+        }
+    }
+
+    async completeReaderFileSketchSelection(event) {
+        const state = this._readerFileSketchState;
+        if (!state || state.host !== event.currentTarget || state.pointerId !== event.pointerId) return;
+
+        this.updateReaderFileSketchSelection(event);
+        const payload = this.buildReaderFileSketchPayload(state);
+        this.clearReaderFileSketchSelection(true);
+
+        if (!payload) {
+            this.showToast('Draw a larger mark to save it.', 'error');
+            return;
+        }
+
+        const noteId = await this.db.addReadingNote(payload);
+        await this.refreshReaderFileDrawings();
+        this.scheduleAutoBackup('drawing annotation add');
+        this.showToast(`${this.getReaderFileDrawingToolMeta(payload.drawingTool).label} added.`, 'success');
+        this.focusReaderTarget({ noteId });
+    }
+
+    async handleReaderFileDrawingErase(event) {
+        if (this.readerFileNoteMode !== 'eraser') return;
+
+        const target = event.target instanceof Element
+            ? event.target.closest('.reader-file-drawing-group[data-note-id]')
+            : null;
+        if (!(target instanceof Element)) return;
+
+        const noteId = Number.parseInt(target.dataset.noteId || '', 10);
+        if (!Number.isFinite(noteId)) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        await this.db.deleteReadingNote(noteId);
+        await this.refreshReaderFileDrawings();
+        this.scheduleAutoBackup('drawing annotation delete');
+        this.showToast('Drawing removed.', 'success');
     }
 
     handleReaderFilePlacement(event) {
@@ -4284,31 +4952,46 @@ class App {
     bindReaderFileNoteHostInteractions(scope = document) {
         scope.querySelectorAll('.reader-file-note-host').forEach(host => {
             host.addEventListener('click', (event) => this.handleReaderFilePlacement(event));
-            host.addEventListener('pointerdown', (event) => this.beginReaderFileHighlightSelection(event));
-            host.addEventListener('pointermove', (event) => this.updateReaderFileHighlightSelection(event));
-            host.addEventListener('pointerup', (event) => this.completeReaderFileHighlightSelection(event));
-            host.addEventListener('pointercancel', () => this.clearReaderFileHighlightSelection(true));
+            host.addEventListener('pointerdown', (event) => {
+                this.beginReaderFileHighlightSelection(event);
+                this.beginReaderFileSketchSelection(event);
+            });
+            host.addEventListener('pointermove', (event) => {
+                this.updateReaderFileHighlightSelection(event);
+                this.updateReaderFileSketchSelection(event);
+            });
+            host.addEventListener('pointerup', (event) => {
+                this.completeReaderFileHighlightSelection(event);
+                void this.completeReaderFileSketchSelection(event);
+            });
+            host.addEventListener('pointercancel', () => {
+                this.clearReaderFileHighlightSelection(true);
+                this.clearReaderFileSketchSelection(true);
+            });
+            host.querySelector('.reader-file-drawing-layer')?.addEventListener('click', (event) => {
+                void this.handleReaderFileDrawingErase(event);
+            });
         });
     }
 
-    async renderStoredFileViewer(source, readingNotes = [], items = []) {
+    async renderStoredFileViewer(source, readingNotes = [], items = [], drawingNotes = []) {
         const container = document.getElementById('reader-content');
         if (!container) return;
 
         if (source.documentKind === 'image') {
-            this.renderImageFileViewer(container, source, readingNotes, items);
+            this.renderImageFileViewer(container, source, readingNotes, items, drawingNotes);
             return;
         }
 
         if (source.documentKind === 'pdf') {
-            await this.renderPdfFileViewer(container, source, readingNotes, items);
+            await this.renderPdfFileViewer(container, source, readingNotes, items, drawingNotes);
             return;
         }
 
         this.renderGenericFileViewer(container, source);
     }
 
-    renderImageFileViewer(container, source, readingNotes = [], items = []) {
+    renderImageFileViewer(container, source, readingNotes = [], items = [], drawingNotes = []) {
         const rectNotes = readingNotes.filter(note => this.isRectReadingNote(note));
         const pointNotes = readingNotes.filter(note => this.isPointReadingNote(note));
         const rectItems = items.filter(item => this.isRectHighlight(item));
@@ -4319,6 +5002,7 @@ class App {
                 <div class="reader-file-note-host reader-image-frame" data-note-target="Image">
                     <img src="${this.esc(source.fileDataUrl)}" alt="${this.esc(source.title)}" class="reader-image-document">
                     <div class="reader-file-note-layer">
+                        ${this.renderReaderFileDrawingLayer(drawingNotes)}
                         ${rectItems.map(item => this.renderReaderFileItemBox(item)).join('')}
                         ${rectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
                         ${pointItems.map(item => this.renderReaderFileItemMarker(item)).join('')}
@@ -4333,7 +5017,7 @@ class App {
         this.bindReaderFileNoteMarkerClicks(container);
     }
 
-    async renderPdfFileViewer(container, source, readingNotes = [], items = []) {
+    async renderPdfFileViewer(container, source, readingNotes = [], items = [], drawingNotes = []) {
         const renderToken = ++this._fileRenderToken;
 
         if (typeof pdfjsLib === 'undefined') {
@@ -4357,12 +5041,14 @@ class App {
                 const pagePointNotes = readingNotes.filter(note => this.isPointReadingNote(note) && (note.pageNumber || 1) === pageNumber);
                 const pageRectItems = items.filter(item => this.isRectHighlight(item) && (item.pageNumber || 1) === pageNumber);
                 const pagePointItems = items.filter(item => this.isPointHighlight(item) && (item.pageNumber || 1) === pageNumber);
+                const pageDrawings = drawingNotes.filter(note => (note.pageNumber || 1) === pageNumber);
                 return `
                     <section class="reader-pdf-page">
                         <div class="reader-pdf-page-label">Page ${pageNumber}</div>
                         <div class="reader-file-note-host reader-pdf-page-stage" data-page-number="${pageNumber}" data-note-target="Page ${pageNumber}">
                             <canvas class="reader-pdf-canvas" data-page-canvas="${pageNumber}"></canvas>
                             <div class="reader-file-note-layer">
+                                ${this.renderReaderFileDrawingLayer(pageDrawings)}
                                 ${pageRectItems.map(item => this.renderReaderFileItemBox(item)).join('')}
                                 ${pageRectNotes.map(note => this.renderReaderFileNoteBox(note)).join('')}
                                 ${pagePointItems.map(item => this.renderReaderFileItemMarker(item)).join('')}
@@ -5851,7 +6537,7 @@ class App {
     }
 
     async renderNotes() {
-        const notes = await this.db.getAllReadingNotes();
+        const notes = this.getVisibleReadingNotes(await this.db.getAllReadingNotes());
         const sources = await this.db.getAllSources();
         const sourceMap = {};
         for (const source of sources) sourceMap[source.id] = source;
