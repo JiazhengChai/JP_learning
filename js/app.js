@@ -1177,6 +1177,10 @@ class App {
         try { state.layer.releasePointerCapture(state.pointerId); } catch { /* ignore */ }
     }
 
+    cloneReaderDrawingNote(note = {}) {
+        return JSON.parse(JSON.stringify(note || {}));
+    }
+
     canPasteReaderDrawing() {
         return !!this.readerDrawingClipboard
             && Number.isFinite(this.currentSource?.id)
@@ -1393,6 +1397,10 @@ class App {
                 && !e.altKey
                 && !e.shiftKey
                 && String(e.key || '').toLowerCase() === 'z';
+            const isDeleteShortcut = !e.ctrlKey
+                && !e.metaKey
+                && !e.altKey
+                && (e.key === 'Delete' || e.key === 'Backspace');
             const isCopyShortcut = (e.ctrlKey || e.metaKey)
                 && !e.altKey
                 && !e.shiftKey
@@ -1417,6 +1425,12 @@ class App {
             if (isPasteShortcut && isReaderDrawingShortcutContext && this.readerDrawingClipboard) {
                 e.preventDefault();
                 void this.pasteReaderDrawing();
+                return;
+            }
+
+            if (isDeleteShortcut && isReaderDrawingShortcutContext && this.readerSelectedDrawingId) {
+                e.preventDefault();
+                void this.deleteSelectedReaderDrawing();
                 return;
             }
 
@@ -4251,6 +4265,7 @@ class App {
             this.db.getReadingNotesBySource(source.id)
         ]);
         const drawingNotes = allReadingNotes.filter(note => this.isDrawingReadingNote(note));
+        this._readerDrawingNotesCache = drawingNotes;
         if (this.readerSelectedDrawingId && !drawingNotes.some(note => note.id === this.readerSelectedDrawingId)) {
             this.readerSelectedDrawingId = null;
         }
@@ -5058,6 +5073,23 @@ class App {
         this.scheduleAutoBackup('drawing annotation rotate');
         this.showToast('Drawing rotated.', 'success');
         this.focusReaderTarget({ noteId: selectedDrawing.id });
+        return true;
+    }
+
+    async deleteSelectedReaderDrawing() {
+        const selectedDrawing = await this.getSelectedReaderDrawing();
+        if (!selectedDrawing) {
+            this.clearReaderDrawingSelection();
+            return false;
+        }
+
+        await this.db.deleteReadingNote(selectedDrawing.id);
+        if (this.readerSelectedDrawingId === selectedDrawing.id) {
+            this.readerSelectedDrawingId = null;
+        }
+        await this.refreshReaderFileDrawings();
+        this.scheduleAutoBackup('drawing annotation delete');
+        this.showToast('Drawing removed.', 'success');
         return true;
     }
 
