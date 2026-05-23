@@ -752,14 +752,41 @@ class App {
         element.style.setProperty('--reader-file-drawing-hit-width', `${this.getReaderFileDrawingHitWidth(strokeWidth)}px`);
     }
 
+    syncReaderDrawingSelectionUi() {
+        document.querySelectorAll('.reader-file-drawing-group[data-note-id]').forEach(group => {
+            const noteId = Number.parseInt(group.dataset.noteId || '', 10);
+            const isSelected = Number.isFinite(noteId) && noteId === this.readerSelectedDrawingId;
+            group.classList.toggle('reader-file-drawing-group-selected', isSelected);
+
+            const selectionOutline = group.querySelector('.reader-file-drawing-selection');
+            if (!isSelected) {
+                selectionOutline?.remove();
+                return;
+            }
+
+            if (selectionOutline) {
+                return;
+            }
+
+            const drawing = group.querySelector('.reader-file-drawing');
+            if (drawing instanceof SVGElement) {
+                const nextSelectionOutline = drawing.cloneNode(true);
+                nextSelectionOutline.setAttribute('class', 'reader-file-drawing-selection');
+                drawing.before(nextSelectionOutline);
+            }
+        });
+
+        this.updateReaderFileNoteModeUi();
+    }
+
     clearReaderDrawingSelection() {
         this.readerSelectedDrawingId = null;
-        this.updateReaderFileNoteModeUi();
+        this.syncReaderDrawingSelectionUi();
     }
 
     setReaderDrawingSelection(noteId = null) {
         this.readerSelectedDrawingId = Number.isFinite(noteId) ? noteId : null;
-        this.updateReaderFileNoteModeUi();
+        this.syncReaderDrawingSelectionUi();
     }
 
     cloneReaderDrawingNote(note = {}) {
@@ -4575,7 +4602,7 @@ class App {
             const host = layer.closest('.reader-file-note-host');
             layer.innerHTML = this.renderReaderFileDrawings(this.getReaderFileDrawingsForHost(drawings, host));
         });
-        this.updateReaderFileNoteModeUi();
+        this.syncReaderDrawingSelectionUi();
     }
 
     async getSelectedReaderDrawing() {
