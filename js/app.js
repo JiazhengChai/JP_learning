@@ -856,6 +856,22 @@ class App {
         });
 
         document.addEventListener('keydown', (e) => {
+            const isUndoShortcut = (e.ctrlKey || e.metaKey)
+                && !e.altKey
+                && !e.shiftKey
+                && String(e.key || '').toLowerCase() === 'z';
+
+            if (isUndoShortcut
+                && this.currentView === 'reader'
+                && this.currentSource
+                && this.sourceSupportsPinnedNotes(this.currentSource)
+                && !this.isModalOpen()
+                && !this.isEditableTarget(e.target)) {
+                e.preventDefault();
+                void this.undoLastReaderDrawing();
+                return;
+            }
+
             if (e.key === 'Escape') {
                 this.closeModal();
                 this.hideSelectionToolbar();
@@ -1014,6 +1030,16 @@ class App {
 
     closeModal() {
         document.getElementById('modal-overlay').classList.add('hidden');
+    }
+
+    isModalOpen() {
+        return !document.getElementById('modal-overlay')?.classList.contains('hidden');
+    }
+
+    isEditableTarget(target) {
+        if (!(target instanceof Element)) return false;
+
+        return !!target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
     }
 
     bindSourceImageFallback(scope = document) {
@@ -4789,6 +4815,42 @@ class App {
         await this.refreshReaderFileDrawings();
         this.scheduleAutoBackup('drawing annotation delete');
         this.showToast('Drawing removed.', 'success');
+    }
+
+    async undoLastReaderDrawing() {
+        if (!this.currentSource || this.currentView !== 'reader' || !this.sourceSupportsPinnedNotes(this.currentSource)) {
+            return false;
+        }
+
+        if (this._readerFileSketchState) {
+            this.clearReaderFileSketchSelection(true);
+            return true;
+        }
+
+        const notes = await this.db.getReadingNotesBySource(this.currentSource.id);
+        const lastDrawing = notes
+            .filter(note => this.isDrawingReadingNote(note))
+            .sort((left, right) => {
+                const leftTimestamp = Number.isFinite(left?.createdAt) ? left.createdAt : 0;
+                const rightTimestamp = Number.isFinite(right?.createdAt) ? right.createdAt : 0;
+                if (rightTimestamp !== leftTimestamp) {
+                    return rightTimestamp - leftTimestamp;
+                }
+
+                const leftId = Number.isFinite(left?.id) ? left.id : 0;
+                const rightId = Number.isFinite(right?.id) ? right.id : 0;
+                return rightId - leftId;
+            })[0];
+
+        if (!lastDrawing || !Number.isFinite(lastDrawing.id)) {
+            return false;
+        }
+
+        await this.db.deleteReadingNote(lastDrawing.id);
+        await this.refreshReaderFileDrawings();
+        this.scheduleAutoBackup('drawing annotation delete');
+        this.showToast('Previous drawing removed.', 'success');
+        return true;
     }
 
     handleReaderFilePlacement(event) {
