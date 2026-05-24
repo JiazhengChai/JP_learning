@@ -813,9 +813,29 @@ class App {
 
     // ─── Selection overlay ───────────────────────────────────────────────────
 
+    getReaderDrawingSelectionOverlayMetrics(note = {}) {
+        const width = Math.max((note.anchorWidth || 0) * 1000, 1);
+        const height = Math.max((note.anchorHeight || 0) * 1000, 1);
+        const smallestSide = Math.max(Math.min(width, height), 1);
+        const strokeWidth = this.getReaderFileDrawingStrokeWidth(note);
+        const pad = this.clampNumber(Math.max(strokeWidth * 0.35, smallestSide * 0.025), 4, 7);
+        const handleHalfSize = this.clampNumber(smallestSide * 0.05, 5, 7);
+        const rotateHandleRadius = this.clampNumber(smallestSide * 0.06, 7, 9);
+        const rotateStemLength = this.clampNumber(smallestSide * 0.18, 20, 28);
+
+        return {
+            pad,
+            handleHalfSize,
+            rotateHandleRadius,
+            rotateStemLength,
+            rotateHandleOffset: rotateStemLength + rotateHandleRadius + 4
+        };
+    }
+
     buildReaderDrawingSelectionOverlay(note) {
         const ns = 'http://www.w3.org/2000/svg';
-        const pad = 10; // SVG-unit padding around the bounding box
+        const metrics = this.getReaderDrawingSelectionOverlayMetrics(note);
+        const pad = metrics.pad;
         const ax = (note.anchorX || 0) * 1000;
         const ay = (note.anchorY || 0) * 1000;
         const aw = (note.anchorWidth || 0) * 1000;
@@ -826,7 +846,7 @@ class App {
         const bh = ah + pad * 2;
         const cx = bx + bw / 2;
         const cy = by + bh / 2;
-        const hs = 9; // half-size of resize handle squares
+        const hs = metrics.handleHalfSize;
 
         const g = document.createElementNS(ns, 'g');
         g.setAttribute('class', 'reader-drawing-selection-overlay');
@@ -850,15 +870,15 @@ class App {
         stem.setAttribute('x1', cx);
         stem.setAttribute('y1', by);
         stem.setAttribute('x2', cx);
-        stem.setAttribute('y2', by - 40);
+        stem.setAttribute('y2', by - metrics.rotateStemLength);
         g.appendChild(stem);
 
         // Rotate handle (circle above top-center)
         const rotHandle = document.createElementNS(ns, 'circle');
         rotHandle.setAttribute('class', 'reader-drawing-rotate-handle');
         rotHandle.setAttribute('cx', cx);
-        rotHandle.setAttribute('cy', by - 52);
-        rotHandle.setAttribute('r', 12);
+        rotHandle.setAttribute('cy', by - metrics.rotateHandleOffset);
+        rotHandle.setAttribute('r', metrics.rotateHandleRadius);
         rotHandle.setAttribute('data-handle', 'rotate');
         g.appendChild(rotHandle);
 
@@ -4399,7 +4419,10 @@ class App {
         });
         document.getElementById('reader-edit-source')?.addEventListener('click', () => this.showEditSourceModal(source));
         view.querySelector('.reader-text-area')?.addEventListener('dblclick', (e) => {
+            if (usesFileViewer) return;
+
             const targetElement = e.target instanceof Element ? e.target : e.target?.parentElement;
+            if (this.isEditableTarget(targetElement) || targetElement?.closest('button, a, label, summary, [role="button"]')) return;
             if (targetElement?.closest('.hl[data-hl-id], .hl-reading-note[data-note-id], .reader-file-note-marker[data-note-id], .reader-file-note-box[data-note-id], .reader-file-item-marker[data-hl-id], .reader-file-item-box[data-hl-id]')) return;
 
             this.hideSelectionToolbar();
