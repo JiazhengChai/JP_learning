@@ -4326,22 +4326,14 @@ class App {
                                 ? `
                                     <div class="reader-file-toolbar-controls">
                                         <div class="reader-file-toolbar-actions">
-                                            <button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Place Note</button>
-                                            <button class="btn btn-secondary btn-sm" id="reader-draw-file-highlight">🟨 Draw Highlight</button>
+                                            <button class="btn btn-secondary btn-sm" id="reader-add-file-note">📌 Note</button>
+                                            <button class="btn btn-secondary btn-sm" id="reader-draw-file-highlight">🟨 Highlight</button>
+                                            ${this.renderReaderFileDrawingToolButtons()}
                                         </div>
-                                        <div class="reader-file-drawing-toolbar">
-                                            <div class="reader-file-drawing-tools">
-                                                ${this.renderReaderFileDrawingToolButtons()}
-                                            </div>
-                                            <div class="reader-file-drawing-actions">
-                                                ${this.renderReaderFileDrawingActionButtons()}
-                                            </div>
-                                            <div class="reader-file-drawing-widths">
-                                                ${this.renderReaderFileDrawingWidthButtons()}
-                                            </div>
-                                            <div class="reader-file-drawing-colors">
-                                                ${this.renderReaderFileDrawingColorButtons()}
-                                            </div>
+                                        <div class="reader-file-drawing-palette">
+                                            ${this.renderReaderFileDrawingWidthButtons()}
+                                            ${this.renderReaderFileDrawingColorButtons()}
+                                            ${this.renderReaderFileDrawingActionButtons()}
                                         </div>
                                     </div>
                                 `
@@ -4793,8 +4785,6 @@ class App {
 
     renderReaderFileDrawingActionButtons() {
         return `
-            <button type="button" class="btn btn-secondary btn-sm" id="reader-copy-drawing" ${this.readerSelectedDrawingId ? '' : 'disabled'}>⧉ Copy</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="reader-paste-drawing" ${this.canPasteReaderDrawing() ? '' : 'disabled'}>📄 Paste</button>
             <button type="button" class="btn btn-secondary btn-sm" id="reader-rotate-drawing-left" ${this.readerSelectedDrawingId ? '' : 'disabled'}>↺ Rotate</button>
             <button type="button" class="btn btn-secondary btn-sm" id="reader-rotate-drawing-right" ${this.readerSelectedDrawingId ? '' : 'disabled'}>↻ Rotate</button>
         `;
@@ -5179,14 +5169,14 @@ class App {
 
         if (pointButton) {
             const pointActive = this.readerFileNoteMode === 'point';
-            pointButton.textContent = pointActive ? '✖ Cancel Pin' : '📌 Place Note';
+            pointButton.textContent = pointActive ? '✖ Pin' : '📌 Note';
             pointButton.classList.toggle('btn-primary', pointActive);
             pointButton.classList.toggle('btn-secondary', !pointActive);
         }
 
         if (rectButton) {
             const rectActive = this.readerFileNoteMode === 'rect';
-            rectButton.textContent = rectActive ? '✖ Cancel Highlight' : '🟨 Draw Highlight';
+            rectButton.textContent = rectActive ? '✖ Highlight' : '🟨 Highlight';
             rectButton.classList.toggle('btn-primary', rectActive);
             rectButton.classList.toggle('btn-secondary', !rectActive);
         }

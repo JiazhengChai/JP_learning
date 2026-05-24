@@ -714,8 +714,9 @@ nav { flex: 1; padding: 12px 0; }
 }
 .reader-file-toolbar {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
     gap: 16px;
     margin-bottom: 10px;
     flex-wrap: wrap;
@@ -740,29 +741,22 @@ nav { flex: 1; padding: 12px 0; }
 }
 .reader-file-toolbar-actions {
     display: flex;
-    gap: 10px;
+    gap: 4px;
     flex-wrap: wrap;
+    justify-content: flex-start;
 }
 .reader-file-toolbar-controls {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: stretch;
     gap: 10px;
 }
-.reader-file-drawing-toolbar {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 8px;
-}
-.reader-file-drawing-tools,
-.reader-file-drawing-actions,
-.reader-file-drawing-widths,
-.reader-file-drawing-colors {
+.reader-file-drawing-palette {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: flex-start;
 }
 .reader-file-drawing-width-btn {
     min-width: 42px;
@@ -2299,17 +2293,15 @@ nav { flex: 1; padding: 12px 0; }
         align-items: flex-start;
     }
     .reader-file-toolbar-controls,
-    .reader-file-drawing-toolbar {
+    .reader-file-drawing-palette {
         width: 100%;
         align-items: flex-start;
     }
     .reader-file-toolbar-actions {
         width: 100%;
+        justify-content: flex-start;
     }
-    .reader-file-drawing-tools,
-    .reader-file-drawing-actions,
-    .reader-file-drawing-widths,
-    .reader-file-drawing-colors {
+    .reader-file-drawing-palette {
         justify-content: flex-start;
     }
     .reader-generic-embed-shell,
