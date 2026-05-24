@@ -523,6 +523,93 @@ test('drawing annotations round-trip through backup export and import', async ()
     db.db.close();
 });
 
+test('circle drawing annotations repair stale stored bounds from drawing geometry', async () => {
+    const db = await freshDatabase();
+    const sourceId = await db.addSource({
+        title: 'Circle Sketch',
+        content: '',
+        sourceType: 'other',
+        language: 'Japanese',
+        documentKind: 'image',
+        fileName: 'circle.png',
+        fileMimeType: 'image/png',
+        fileSize: 24,
+        fileDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+    });
+
+    await db.addReadingNote({
+        sourceId,
+        text: 'Circle · Image',
+        note: '',
+        color: 'red',
+        anchorType: 'drawing',
+        pageNumber: null,
+        anchorX: 0.02,
+        anchorY: 0.02,
+        anchorWidth: 0.8,
+        anchorHeight: 0.1,
+        targetLabel: 'Image',
+        drawingTool: 'circle',
+        drawingData: {
+            centerX: 0.5,
+            centerY: 0.25,
+            radiusX: 0.125,
+            radiusY: 0.125,
+            strokeWidth: 6,
+            rotation: 45
+        }
+    });
+
+    const [storedCircle] = await db.getAllReadingNotes();
+    assert.equal(storedCircle.anchorX, 0.375);
+    assert.equal(storedCircle.anchorY, 0.125);
+    assert.equal(storedCircle.anchorWidth, 0.25);
+    assert.equal(storedCircle.anchorHeight, 0.25);
+    assert.deepEqual(storedCircle.drawingData, {
+        centerX: 0.5,
+        centerY: 0.25,
+        radiusX: 0.125,
+        radiusY: 0.125,
+        strokeWidth: 6,
+        rotation: 45
+    });
+
+    const exported = await db.exportAll();
+    const exportedCircle = exported.readingNotes.find(note => note.anchorType === 'drawing');
+
+    assert.ok(exportedCircle);
+    assert.equal(exportedCircle.anchorX, 0.375);
+    assert.equal(exportedCircle.anchorY, 0.125);
+    assert.equal(exportedCircle.anchorWidth, 0.25);
+    assert.equal(exportedCircle.anchorHeight, 0.25);
+    assert.deepEqual(exportedCircle.drawingData, {
+        centerX: 0.5,
+        centerY: 0.25,
+        radiusX: 0.125,
+        radiusY: 0.125,
+        strokeWidth: 6,
+        rotation: 45
+    });
+
+    await db.importAll(exported, { mode: 'replace' });
+
+    const [restoredCircle] = await db.getAllReadingNotes();
+    assert.equal(restoredCircle.anchorX, 0.375);
+    assert.equal(restoredCircle.anchorY, 0.125);
+    assert.equal(restoredCircle.anchorWidth, 0.25);
+    assert.equal(restoredCircle.anchorHeight, 0.25);
+    assert.deepEqual(restoredCircle.drawingData, {
+        centerX: 0.5,
+        centerY: 0.25,
+        radiusX: 0.125,
+        radiusY: 0.125,
+        strokeWidth: 6,
+        rotation: 45
+    });
+
+    db.db.close();
+});
+
 test('source content is normalized to LF on read and export', async () => {
     const db = await freshDatabase();
     const sourceId = await db.addSource({

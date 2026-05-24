@@ -164,12 +164,53 @@ class Database {
         };
     }
 
+    _clampNormalizedNumber(value, min = 0, max = 1) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return min;
+        return Math.min(max, Math.max(min, numeric));
+    }
+
+    _normalizeDrawingNoteGeometry(note = {}) {
+        if (note?.anchorType !== 'drawing' || !note?.drawingData || typeof note.drawingData !== 'object') {
+            return note;
+        }
+
+        const drawingTool = String(note.drawingTool || '').trim();
+        const drawingData = { ...note.drawingData };
+
+        if (drawingTool === 'circle') {
+            const centerX = this._clampNormalizedNumber(drawingData.centerX, 0, 1);
+            const centerY = this._clampNormalizedNumber(drawingData.centerY, 0, 1);
+            const radiusX = this._clampNormalizedNumber(drawingData.radiusX, 0, 0.5);
+            const radiusY = this._clampNormalizedNumber(drawingData.radiusY, 0, 0.5);
+            const anchorX = this._clampNormalizedNumber(centerX - radiusX, 0, 1);
+            const anchorY = this._clampNormalizedNumber(centerY - radiusY, 0, 1);
+
+            return {
+                ...note,
+                anchorX,
+                anchorY,
+                anchorWidth: Math.max(radiusX * 2, 0),
+                anchorHeight: Math.max(radiusY * 2, 0),
+                drawingData: {
+                    ...drawingData,
+                    centerX,
+                    centerY,
+                    radiusX,
+                    radiusY
+                }
+            };
+        }
+
+        return note;
+    }
+
     _normalizeReadingNote(note = {}) {
         const startOffset = Number.isFinite(note.startOffset) ? note.startOffset : null;
         const endOffset = Number.isFinite(note.endOffset) ? note.endOffset : null;
         const anchorType = String(note.anchorType || '').trim() || (startOffset !== null && endOffset !== null ? 'text' : '');
 
-        return {
+        return this._normalizeDrawingNoteGeometry({
             ...note,
             text: String(note.text || '').trim(),
             note: String(note.note || '').trim(),
@@ -185,7 +226,7 @@ class Database {
             anchorWidth: Number.isFinite(note.anchorWidth) ? note.anchorWidth : null,
             anchorHeight: Number.isFinite(note.anchorHeight) ? note.anchorHeight : null,
             targetLabel: String(note.targetLabel || '').trim()
-        };
+        });
     }
 
     _mergeTags(left = [], right = []) {
