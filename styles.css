@@ -719,6 +719,11 @@ nav { flex: 1; padding: 12px 0; }
     gap: 16px;
     margin-bottom: 10px;
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    padding: 12px 0;
+    background: var(--bg-body);
 }
 .reader-file-toolbar-copy {
     display: flex;
