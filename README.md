@@ -9,7 +9,8 @@ LangLens is a focused language study workspace for learning from real text. Impo
 ## Highlights
 
 - Read from a personal library of imported texts.
-- Drop files or plain text onto the dashboard or library to create texts quickly.
+- Choose files or drop files and plain text onto the dashboard or library to create texts quickly.
+- Use phone, tablet, and desktop layouts with a mobile navigation menu, readable list cards, and touch-sized controls.
 - Save study items with just an input text and note.
 - Import a line-based item list from a text file using formats like `word:note` or `word`.
 - Capture reading notes in context and browse them later by source or color.

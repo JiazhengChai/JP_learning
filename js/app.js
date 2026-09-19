@@ -1372,6 +1372,7 @@ class App {
     }
 
     bindEvents() {
+        this.bindResponsiveNavigation();
         document.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -1411,6 +1412,16 @@ class App {
         });
 
         document.addEventListener('keydown', (e) => {
+            if (document.body.classList.contains('menu-open')) {
+                if (e.key === 'Escape') { e.preventDefault(); this.setNavigationOpen(false); }
+                if (e.key === 'Tab') this.trapFocus(e, document.getElementById('sidebar'));
+                return;
+            }
+            if (this.isModalOpen()) {
+                if (e.key === 'Escape') { e.preventDefault(); this.closeModal(); }
+                if (e.key === 'Tab') this.trapFocus(e, document.getElementById('modal-content'));
+                return;
+            }
             const isReaderDrawingShortcutContext = this.currentView === 'reader'
                 && this.currentSource
                 && this.sourceSupportsPinnedNotes(this.currentSource)
@@ -1486,6 +1497,18 @@ class App {
                 this.hideSelectionToolbar();
             }
         });
+        document.getElementById('selection-toolbar').addEventListener('pointerdown', e => e.preventDefault());
+        window.addEventListener('resize', () => this.hideSelectionToolbar());
+        document.getElementById('main').addEventListener('scroll', () => this.hideSelectionToolbar(), { passive: true });
+        document.addEventListener('selectionchange', () => {
+            clearTimeout(this._selectionChangeTimer);
+            this._selectionChangeTimer = setTimeout(() => {
+                if (this.isModalOpen() || this.currentView !== 'reader') return;
+                const selection = window.getSelection();
+                if (!selection?.toString().trim()) { this.hideSelectionToolbar(); return; }
+                this.handleTextSelection({ target: selection.anchorNode?.parentElement });
+            }, 160);
+        });
 
         document.getElementById('btn-theme')?.addEventListener('click', () => this.toggleTheme());
         document.getElementById('btn-quick-backup')?.addEventListener('click', async () => {
@@ -1507,7 +1530,48 @@ class App {
         this._pendingSelection = null;
     }
 
+    bindResponsiveNavigation() {
+        this.mobileLayout = window.matchMedia('(max-width: 900px)');
+        document.getElementById('menu-toggle').addEventListener('click', () => this.setNavigationOpen(!document.body.classList.contains('menu-open')));
+        document.getElementById('menu-close').addEventListener('click', () => this.setNavigationOpen(false));
+        document.getElementById('sidebar-backdrop').addEventListener('click', () => this.setNavigationOpen(false));
+        const update = () => {
+            const focusInSidebar = document.getElementById('sidebar').contains(document.activeElement);
+            this.setNavigationOpen(false, false);
+            if (this.mobileLayout.matches && focusInSidebar) document.getElementById('menu-toggle').focus();
+        };
+        this.mobileLayout.addEventListener('change', update);
+        update();
+    }
+
+    setNavigationOpen(open, restoreFocus = true) {
+        const wasOpen = document.body.classList.contains('menu-open');
+        open = !!open && !!this.mobileLayout?.matches;
+        document.body.classList.toggle('menu-open', open);
+        const toggle = document.getElementById('menu-toggle');
+        toggle.setAttribute('aria-expanded', String(open));
+        toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+        document.getElementById('sidebar').inert = (!!this.mobileLayout?.matches && !open) || this.isModalOpen();
+        document.getElementById('sidebar-backdrop').hidden = !open;
+        document.getElementById('main').inert = open || this.isModalOpen();
+        if (open) document.getElementById('menu-close').focus();
+        else if (wasOpen && restoreFocus && this.mobileLayout?.matches) toggle.focus();
+    }
+
+    trapFocus(event, container) {
+        const controls = [...container.querySelectorAll('a[href], button, input, select, textarea, [tabindex="0"]')]
+            .filter(el => !el.disabled && !el.closest('[inert]') && el.getClientRects().length);
+        if (!controls.length) { event.preventDefault(); container.focus(); return; }
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !container.contains(document.activeElement))) {
+            event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !container.contains(document.activeElement))) {
+            event.preventDefault(); first.focus();
+        }
+    }
+
     async navigate(viewName, options = {}) {
+        this.setNavigationOpen(false);
         const allowedViews = new Set(['dashboard', 'library', 'reader', 'vocab', 'notes', 'review']);
         const targetView = allowedViews.has(viewName) ? viewName : 'dashboard';
         let routeState = this.getRouteState(targetView, options);
@@ -1539,10 +1603,11 @@ class App {
         }
 
         this.currentView = targetView;
+        document.getElementById('mobile-view-label').textContent = { dashboard: 'Dashboard', library: 'Library', vocab: 'Items', notes: 'Notes', review: 'Review', reader: 'Reader' }[targetView];
 
-        document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
+        document.querySelectorAll('.nav-link').forEach(link => { link.classList.remove('active'); link.removeAttribute('aria-current'); });
         const active = document.querySelector(`.nav-link[data-view="${targetView === 'reader' ? 'library' : targetView}"]`);
-        if (active) active.classList.add('active');
+        if (active) { active.classList.add('active'); active.setAttribute('aria-current', 'page'); }
 
         document.querySelectorAll('.view').forEach(view => {
             view.classList.remove('active');
@@ -1579,11 +1644,23 @@ class App {
     }
 
     showModal(html, opts = {}) {
+        if (!this.isModalOpen()) this._modalReturnFocus = document.activeElement;
+        this.setNavigationOpen(false, false);
         const overlay = document.getElementById('modal-overlay');
         const content = document.getElementById('modal-content');
         content.innerHTML = html;
         content.className = `modal-content ${opts.size || ''}`;
         overlay.classList.remove('hidden');
+        content.setAttribute('role', 'dialog');
+        content.setAttribute('aria-modal', 'true');
+        content.setAttribute('tabindex', '-1');
+        const heading = content.querySelector('h2, h3');
+        if (heading) { heading.id = 'modal-heading'; content.setAttribute('aria-labelledby', heading.id); }
+        else content.removeAttribute('aria-labelledby');
+        document.getElementById('main').inert = true;
+        document.getElementById('sidebar').inert = true;
+        document.querySelector('.mobile-header').inert = true;
+        content.focus();
     }
 
     bindEnterToSubmit(form) {
@@ -1614,7 +1691,12 @@ class App {
     }
 
     closeModal() {
+        const wasOpen = this.isModalOpen();
         document.getElementById('modal-overlay').classList.add('hidden');
+        document.querySelector('.mobile-header').inert = false;
+        this.setNavigationOpen(false, false);
+        if (wasOpen && this._modalReturnFocus?.isConnected && !this._modalReturnFocus.closest('[inert]')) this._modalReturnFocus.focus();
+        else if (wasOpen && this.mobileLayout?.matches) document.getElementById('menu-toggle').focus();
     }
 
     isModalOpen() {
@@ -2118,6 +2200,26 @@ class App {
 
     bindSourceDropzone(dropzone) {
         if (!dropzone) return;
+
+        const picker = document.createElement('input');
+        picker.type = 'file';
+        picker.multiple = true;
+        picker.hidden = true;
+        const browse = document.createElement('button');
+        browse.type = 'button';
+        browse.className = 'btn btn-secondary source-file-picker';
+        browse.textContent = 'Choose files';
+        browse.addEventListener('click', () => picker.click());
+        picker.addEventListener('change', async () => {
+            if (!picker.files.length) return;
+            browse.disabled = true;
+            try {
+                const result = await this.importDroppedSources({ files: [...picker.files] });
+                this.showToast(`${result.addedCount} source${result.addedCount === 1 ? '' : 's'} added to the library.`, 'success');
+            } catch (error) { this.showToast(`File import failed: ${error.message}`, 'error'); }
+            finally { picker.value = ''; browse.disabled = false; }
+        });
+        (dropzone.querySelector('.dashboard-dropzone-copy') || dropzone).append(browse, picker);
 
         const setDragging = (active) => {
             dropzone.classList.toggle('is-dragover', !!active);
@@ -3738,8 +3840,8 @@ class App {
                 <div class="dashboard-dropzone-mark">+</div>
                 <div>
                     <div class="dashboard-dropzone-kicker">Quick Import</div>
-                    <div class="library-dropzone-title">Drop files or text onto the dashboard</div>
-                    <p>Drag text files, PDFs, images, or any other file here to store and annotate them locally. Plain text still opens the editor first so you can review it before saving.</p>
+                    <div class="library-dropzone-title">Add files or text to your library</div>
+                    <p>Choose files or drop them here to start reading and annotating. You can also drop plain text to review it in the editor before saving.</p>
                 </div>
             </div>
 
@@ -3925,7 +4027,7 @@ class App {
                             : '—';
                         return `
                         <tr class="library-row" data-id="${source.id}">
-                            <td>
+                            <td data-label="Title">
                                 <div class="library-title-cell">
                                     ${source.imageUrl ? `
                                         <div class="library-title-thumb" data-source-image-shell>
@@ -3937,15 +4039,15 @@ class App {
                                     <div class="vocab-text table-preview-line" title="${this.esc(titleText)}">${this.esc(titleText)}</div>
                                 </div>
                             </td>
-                            <td>
+                            <td data-label="Preview">
                                 <div class="table-preview-line" title="${this.esc(previewText)}">${this.esc(previewText)}</div>
                             </td>
-                            <td><span class="type-badge ${sourceType}">${sourceType}</span></td>
-                            <td><span class="library-inline-meta">${counts[source.id] || 0} items</span></td>
-                            <td><span class="library-inline-meta">${this.formatDate(source.createdAt)}</span></td>
-                            <td><div class="table-preview-line" title="${this.esc(languageText)}">${this.esc(languageText)}</div></td>
-                            <td><div class="table-preview-line" title="${this.esc(tagsText)}">${this.esc(tagsText)}</div></td>
-                            <td class="actions-cell">
+                            <td data-label="Type"><span class="type-badge ${sourceType}">${sourceType}</span></td>
+                            <td data-label="Items"><span class="library-inline-meta">${counts[source.id] || 0} items</span></td>
+                            <td data-label="Added"><span class="library-inline-meta">${this.formatDate(source.createdAt)}</span></td>
+                            <td data-label="Language"><div class="table-preview-line" title="${this.esc(languageText)}">${this.esc(languageText)}</div></td>
+                            <td data-label="Tags"><div class="table-preview-line" title="${this.esc(tagsText)}">${this.esc(tagsText)}</div></td>
+                            <td data-label="Actions" class="actions-cell">
                                 <div class="table-actions">
                                     <button type="button" class="icon-action-btn" data-source-action="edit" title="Edit text">✏️</button>
                                     <button type="button" class="icon-action-btn icon-action-danger" data-source-action="delete" title="Remove text">✕</button>
@@ -4088,7 +4190,7 @@ class App {
 
             <div class="library-dropzone" id="library-dropzone">
                 <div class="library-dropzone-title">Drop files or text here</div>
-                <p>Drop text files, PDFs, images, or pasted text to add them to the library. Stored files stay local and are included in backups. Single-click a row to open it and double-click to edit it.</p>
+                <p>Choose files or drop text files, PDFs, images, or pasted text here. Tap a source to read it, or use its edit button to make changes.</p>
             </div>
 
             <div id="library-cards-container"></div>
@@ -6053,7 +6155,7 @@ class App {
         const range = selection.getRangeAt(0);
         if (!readerContent.contains(range.commonAncestorContainer)) return;
 
-        const clickedHighlight = e.target.closest && e.target.closest('.hl[data-hl-id]');
+        const clickedHighlight = e.target?.closest?.('.hl[data-hl-id]');
         if (clickedHighlight && text === clickedHighlight.textContent.trim()) return;
 
         const startOffset = this.getSourceOffset(range.startContainer, range.startOffset);
@@ -6071,9 +6173,13 @@ class App {
 
         const rect = range.getBoundingClientRect();
         const toolbar = document.getElementById('selection-toolbar');
-        toolbar.style.top = `${rect.top - 48}px`;
-        toolbar.style.left = `${rect.left + rect.width / 2}px`;
         toolbar.classList.remove('hidden');
+        const bounds = toolbar.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+        const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
+        toolbar.style.left = `${Math.max(left + bounds.width / 2 + 8, Math.min(rect.left + rect.width / 2, left + width - bounds.width / 2 - 8))}px`;
+        toolbar.style.top = `${Math.max(top + 8, Math.min(rect.top >= top + bounds.height + 12 ? rect.top - bounds.height - 8 : rect.bottom + 8, top + height - bounds.height - 8))}px`;
     }
 
     async buildCategoryMarkup(selectedCategory = 'vocab') {
@@ -7506,22 +7612,22 @@ class App {
                             const sourceActive = activeSource === sourceValue;
                             return `
                                 <tr class="vocab-row" data-hl-id="${item.id}">
-                                    <td>
+                                    <td data-label="Text">
                                         <div class="vocab-text table-preview-line" title="${this.esc(textPreview)}">${this.esc(textPreview)}</div>
                                     </td>
-                                    <td><div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
-                                    <td><span class="tag">${this.esc(item.category || 'General')}</span></td>
-                                    <td class="vocab-source-cell">
+                                    <td data-label="Note"><div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div></td>
+                                    <td data-label="Category"><span class="tag">${this.esc(item.category || 'General')}</span></td>
+                                    <td data-label="Source" class="vocab-source-cell">
                                         <button type="button" class="table-filter-chip ${sourceActive ? 'active' : ''}" data-vocab-source-filter="${this.esc(sourceValue)}" title="Filter by ${this.esc(sourceLabel)}">${this.esc(sourceLabel)}</button>
                                     </td>
-                                    <td>
+                                    <td data-label="Mastery">
                                         <div class="mastery">
                                             ${[0, 1, 2, 3, 4].map(i => `<span class="mastery-dot ${i < level ? 'filled' : ''}"></span>`).join('')}
                                             <span class="mastery-label">${this.masteryName(level)}</span>
                                         </div>
                                     </td>
-                                    <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(item.createdAt)}</td>
-                                    <td class="actions-cell">
+                                    <td data-label="Added" style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(item.createdAt)}</td>
+                                    <td data-label="Actions" class="actions-cell">
                                         <div class="table-actions">
                                             <button type="button" class="icon-action-btn" data-item-action="edit" data-hl-id="${item.id}" title="Edit item">✏️</button>
                                             <button type="button" class="icon-action-btn icon-action-danger" data-item-action="delete" data-hl-id="${item.id}" title="Delete item">✕</button>
@@ -7567,17 +7673,17 @@ class App {
                             const locationLabel = this.getReadingNoteLocationLabel(note, sourceMap[note.sourceId] || null);
                             return `
                                 <tr class="notes-row" data-note-id="${note.id}" data-source-id="${sourceId}">
-                                    <td>
+                                    <td data-label="Selected text">
                                         <div class="vocab-text table-preview-line" style="color:var(--${colorMeta.tone});" title="${this.esc(selectedText)}">${this.esc(selectedText)}</div>
                                         ${locationLabel ? `<div class="hl-meta-line">${this.esc(locationLabel)}</div>` : ''}
                                     </td>
-                                    <td>
+                                    <td data-label="Note">
                                         <div class="table-preview-line table-preview-note note-text" title="${this.esc(notePreview)}">${this.esc(notePreview)}</div>
                                     </td>
-                                    <td><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
-                                    <td style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
-                                    <td style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(note.createdAt)}</td>
-                                    <td class="actions-cell">
+                                    <td data-label="Color"><span class="tag note-color-tag note-color-${colorMeta.value}">${this.esc(colorMeta.label)}</span></td>
+                                    <td data-label="Source" style="font-size:0.78rem;color:var(--text-secondary);">${this.esc(this.getSourceLabel(note, sourceMap))}</td>
+                                    <td data-label="Added" style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${this.formatDate(note.createdAt)}</td>
+                                    <td data-label="Actions" class="actions-cell">
                                         <div class="table-actions">
                                             <button type="button" class="icon-action-btn" data-note-action="edit" data-note-id="${note.id}" data-source-id="${sourceId}" title="Edit note">✏️</button>
                                             <button type="button" class="icon-action-btn icon-action-danger" data-note-action="delete" data-note-id="${note.id}" data-source-id="${sourceId}" title="Delete note">✕</button>
@@ -7877,7 +7983,7 @@ class App {
                                 ${card.context ? `<div class="card-context">${this.esc(card.context)}</div>` : ''}
                             </div>
                         ` : `
-                            <div class="card-prompt">Click the card or press Space to reveal the note</div>
+                            <div class="card-prompt">Tap the card or press Space to reveal the note</div>
                         `}
                     </div>
                 </div>
