@@ -136,9 +136,30 @@ class CloudSync {
                 return;
             }
             await this.app.db.importAll(payload, { mode: 'merge' });
+            await guest.setSetting('cloud-migrated-account', this.user.uid);
             this.app.showToast('Local progress added to this account. The original local copy is still available when signed out.');
             await this.app.navigate('dashboard');
             this.schedule(0);
+        } finally { guest.db.close(); }
+    }
+
+    async recoverLocalIfEmpty(captured, remote) {
+        // Only migrate into a never-used cloud account. A cloud deletion must
+        // never resurrect the guest library, nor move it into another account.
+        if (remote.revision || captured.state?.revision ||
+            SyncCore.stores.some(name => captured.data[name].length || remote.data[name].length)) return false;
+        const guest = new Database();
+        await guest.init();
+        try {
+            if (await guest.getSetting('cloud-migrated-account')) return false;
+            const payload = await guest.exportAll();
+            if (!SyncCore.stores.some(name => payload[name].length)) return false;
+            this.setStatus('Moving your existing progress into this account…');
+            await this.app.db.importAll(payload, { mode: 'merge' });
+            await guest.setSetting('cloud-migrated-account', this.user.uid);
+            this.app.showToast('Your existing progress is now in this account. The original local copy is preserved.');
+            await this.app.navigate('dashboard');
+            return true;
         } finally { guest.db.close(); }
     }
 
@@ -251,9 +272,12 @@ class CloudSync {
             await navigator.locks.request(`langlens-sync-${this.user.uid}`, async () => {
                 if (this.app.db.syncBusy) { this.schedule(); return; }
                 this.setStatus('Syncing…');
-                const captured = await this.app.db.readSyncSnapshot();
-                const base = captured.state?.data || SyncCore.empty();
+                let captured = await this.app.db.readSyncSnapshot();
                 const remote = await this.readRemote(captured.state);
+                if (!this.editing() && await this.recoverLocalIfEmpty(captured, remote)) {
+                    captured = await this.app.db.readSyncSnapshot();
+                }
+                const base = captured.state?.data || SyncCore.empty();
                 if (this.editing() && SyncCore.changes(base, remote.data).length) {
                     this.setStatus('Cloud updates waiting · finish editing to sync');
                     this.schedule(5000);
@@ -315,7 +339,10 @@ class CloudSync {
                 const current = await this.app.db.readSyncSnapshot();
                 const pending = SyncCore.changes(published.data, current.data).length;
                 if (pending && edits.length) this.schedule();
-                this.setStatus(blocked.length ? `Some changes are local only · ${blocked[0]}` : pending ? 'Saved locally · finishing cloud sync' : 'Saved to cloud');
+                const hasProgress = SyncCore.stores.some(name => current.data[name].length);
+                this.setStatus(blocked.length ? `${pending} records still local · ${blocked[0]}` : pending ? 'Saved locally · finishing cloud sync' :
+                    hasProgress ? `Saved to cloud · ${current.data.highlights.length} items, ${current.data.sources.length} sources` :
+                    'Cloud library is empty · open your original browser to sync existing progress');
                 if (changed) {
                     await this.app.updateReviewBadge();
                     // Do not redraw an open editor or interrupt a review session.

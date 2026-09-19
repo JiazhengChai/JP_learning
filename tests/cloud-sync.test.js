@@ -4,6 +4,7 @@ const { indexedDB } = require('fake-indexeddb');
 globalThis.indexedDB = indexedDB;
 globalThis.SyncCore = require('../js/sync-core.js');
 const { Database } = require('../js/db.js');
+globalThis.Database = Database;
 const CloudSync = require('../js/cloud-sync.js');
 const { empty, merge, changes, apply } = SyncCore;
 const library = (...rows) => ({ ...empty(), highlights: rows });
@@ -220,4 +221,80 @@ test('incoming sync waits for open editors, then exposes competing edits without
         assert.equal((await b.app.db.getHighlight(id)).text, 'local edit');
         assert.equal((await a.app.db.getHighlight(id)).text, 'remote edit');
     } finally { a.app.db.db.close(); b.app.db.db.close(); }
+});
+
+test('empty cloud does not claim saved progress; first sign-in migrates guest progress only once', async () => {
+    const server = memoryFirestore();
+    const a = await device(server);
+    const guest = new Database();
+    await guest.init();
+    try {
+        await a.sync();
+        assert.match(a.message, /Cloud library is empty/);
+        const guestSource = await guest.addSource({ title: 'Original library' });
+        await guest.addHighlight({ sourceId: guestSource, text: 'Original progress', reviewCount: 7 });
+        await a.sync();
+        assert.equal(a.lastError, undefined);
+        assert.match(a.message, /Saved to cloud · 1 items, 1 sources/);
+        const [item] = await a.app.db.getAllHighlights();
+        assert.equal(item.reviewCount, 7);
+        assert.equal((await guest.getAllHighlights()).length, 1);
+        await a.app.db.clearLibraryData();
+        await a.sync();
+        assert.equal((await a.app.db.getAllHighlights()).length, 0);
+        const b = await device(memoryFirestore());
+        try {
+            b.user = { uid: 'another-user' }; b.auth.currentUser = b.user;
+            await b.sync();
+            assert.equal((await b.app.db.getAllHighlights()).length, 0);
+        } finally { b.app.db.db.close(); }
+    } finally {
+        await guest.clearLibraryData();
+        await guest.deleteSetting('cloud-migrated-account');
+        guest.db.close(); a.app.db.db.close();
+    }
+});
+
+test('file upload failure preserves local source and linked progress, then retries when storage is enabled', async () => {
+    const server = memoryFirestore();
+    const a = await device(server);
+    const b = await device(server);
+    const objects = new Map();
+    const sdk = {
+        ref: (_, path) => path,
+        getMetadata: async path => { if (!objects.has(path)) throw { code: 'storage/object-not-found' }; return {}; },
+        uploadBytes: async (path, blob) => { objects.set(path, new Uint8Array(await blob.arrayBuffer())); },
+        getBytes: async path => objects.get(path)
+    };
+    const previousReader = globalThis.FileReader;
+    globalThis.FileReader = class {
+        async readAsDataURL(blob) {
+            this.result = `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`;
+            this.onload();
+        }
+    };
+    try {
+        const fileDataUrl = 'data:application/pdf;base64,JVBERi10ZXN0';
+        const id = await a.app.db.addSource({ title: 'Attachment', fileDataUrl });
+        await a.app.db.addHighlight({ sourceId: id, text: 'Linked review', reviewCount: 3 });
+        await a.sync();
+        assert.match(a.message, /2 records still local/);
+        assert.equal((await a.app.db.getSource(id)).fileDataUrl, fileDataUrl);
+        assert.equal(server.records.size, 0);
+        for (const client of [a, b]) { client.storage = {}; client.storageSDK = sdk; }
+        await a.sync(); await b.sync();
+        assert.equal(a.lastError, undefined); assert.equal(b.lastError, undefined);
+        assert.equal((await b.app.db.getSource(id)).fileDataUrl, fileDataUrl);
+        assert.equal((await b.app.db.getAllHighlights())[0].reviewCount, 3);
+        assert.equal(objects.size, 1);
+        assert.equal(JSON.parse(server.records.get(`users/test-user/sources/${id}`).payload).fileDataUrl, '');
+        await b.app.db.updateSource({ ...(await b.app.db.getSource(id)), title: 'Edited remotely' });
+        await b.sync(); await a.sync();
+        assert.equal((await a.app.db.getSource(id)).fileDataUrl, fileDataUrl);
+        assert.equal((await a.app.db.getSource(id)).title, 'Edited remotely');
+        assert.equal(objects.size, 1);
+    } finally {
+        globalThis.FileReader = previousReader;
+        a.app.db.db.close(); b.app.db.db.close();
+    }
 });

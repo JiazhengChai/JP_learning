@@ -22,7 +22,7 @@ Use `storage.cors.json` for authenticated browser downloads. Adjust its origin l
 ## User flow
 
 - Signed-out users keep the original local library. Signing in opens a separate local database for that account and automatically loads cloud progress.
-- On the first sign-in, choose **Bring local progress into this account** once to merge the existing guest library. The original guest copy is retained. Existing JSON files can also be restored using the existing Restore dialog.
+- On first sign-in to a never-used, empty cloud account, the existing guest library migrates automatically. The original guest copy is retained; a migration marker prevents automatic reuse in a different account. Existing cloud accounts can use **Bring local progress into this account** to merge a guest library explicitly. Cloud deletions never trigger automatic recovery. Existing JSON files can also be restored using the existing Restore dialog.
 - Edits persist locally first. Changes sync shortly afterward, on reconnect, and when the app becomes visible. Other devices receive notifications through a small Firestore revision document.
 - Simultaneous edits to different records merge. Competing edits to the same record pause synchronization and offer both versions for review; there is no silent last-device-wins overwrite.
 - Signing out switches back to the guest library. Pending changes stay in the account's local cache and sync after signing back in.
@@ -42,4 +42,4 @@ Files use content-addressed Storage objects (50 MiB maximum each); text/notes ha
 
 Run `npm test` for existing backup tests plus offline merges, delete/edit conflicts, account isolation, migration ID remapping, and edits during upload. After configuring the project, test Google sign-in in two browser profiles, an offline edit and reconnect, simultaneous changes, a file upload/download, and cross-user access denial before publishing.
 
-Verified during setup: Google sign-in and session persistence; a real temporary item saved to Firestore and removed through the app; 36 local tests; 12 rule evaluations using the Firebase Rules API and `tests/firestore-rules-cases.json`. The default database is on the free tier. Cloud Storage has not been provisioned or tested yet. Live multi-device behavior still needs a second-device acceptance check; the automated suite exercises two independent sync clients.
+Verified during setup: Google sign-in and session persistence; a real temporary item saved to Firestore and removed through the app; 38 local tests; 12 rule evaluations using the Firebase Rules API and `tests/firestore-rules-cases.json`. Tests include one-time guest migration and file upload failure/retry/restore through two independent clients. Cloud Storage has not been provisioned or tested live: the authorized billing upgrade was rejected by Google with `Cloud billing quota exceeded`. Live multi-device attachment behavior still needs an acceptance check after that quota is resolved.
