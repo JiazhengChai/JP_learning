@@ -64,6 +64,8 @@ class App {
     }
 
     async init() {
+        this.cloud = new CloudSync(this);
+        await this.cloud.prepare();
         await this.db.init();
         this.loadTheme();
         this.bindEvents();
@@ -76,6 +78,7 @@ class App {
             replaceHistory: true
         });
         await this.updateReviewBadge();
+        this.cloud.start();
     }
 
     loadTheme() {
@@ -2347,7 +2350,7 @@ class App {
             </div>
             <label class="backup-checkbox ${hasData ? '' : 'is-disabled'}">
                 <input type="checkbox" id="clear-data-confirm" ${hasData ? '' : 'disabled'}>
-                <span>I understand this clears the current library on this browser and can only be undone with a backup restore.</span>
+                <span>I understand this clears the current library${this.db.cloud ? ' and syncs these deletions to my cloud account and other devices' : ' on this browser'}, and can only be undone with a backup restore.</span>
             </label>
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" id="clear-data-cancel">Cancel</button>
@@ -3648,7 +3651,10 @@ class App {
             lastBackupAt: this.backupState.lastBackupAt,
             thresholdMs: this.backupState.backupThresholdMs
         });
-        const reminderMessage = backupReminder.kind === 'stale' && this.backupState.lastBackupAt
+        if (this.db.cloud) backupReminder.title = 'Optional recovery backup';
+        const reminderMessage = this.db.cloud
+            ? 'Account sync runs automatically when connected. A separate JSON backup can help recover accidental deletions.'
+            : backupReminder.kind === 'stale' && this.backupState.lastBackupAt
             ? `${backupReminder.message} Last backup was ${this.relativeTime(this.backupState.lastBackupAt)}.`
             : backupReminder.message;
         const migrationMessage = this.migrationNotice

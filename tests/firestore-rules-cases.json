@@ -1,0 +1,238 @@
+{
+  "testCases": [
+    {
+      "expectation": "ALLOW",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "ALLOW",
+      "request": {
+        "method": "list",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "other-user",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": null
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "delete",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "other-user",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "create",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "other-user",
+          "token": {}
+        },
+        "resource": {
+          "data": {
+            "payload": "{}"
+          }
+        }
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/private/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "ALLOW",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/sync/state",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "get",
+        "path": "/databases/(default)/documents/users/owner/sync/state",
+        "auth": {
+          "uid": "other-user",
+          "token": {}
+        }
+      }
+    },
+    {
+      "expectation": "ALLOW",
+      "request": {
+        "method": "create",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        },
+        "resource": {
+          "data": {
+            "payload": "{}"
+          }
+        }
+      },
+      "functionMocks": [
+        {
+          "function": "getAfter",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": {
+              "data": {
+                "revision": 1
+              }
+            }
+          }
+        },
+        {
+          "function": "exists",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": false
+          }
+        }
+      ]
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "create",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        },
+        "resource": {
+          "data": {
+            "payload": "{}"
+          }
+        }
+      },
+      "functionMocks": [
+        {
+          "function": "getAfter",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": {
+              "data": {
+                "revision": 0
+              }
+            }
+          }
+        },
+        {
+          "function": "exists",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": false
+          }
+        }
+      ]
+    },
+    {
+      "expectation": "DENY",
+      "request": {
+        "method": "create",
+        "path": "/databases/(default)/documents/users/owner/highlights/1",
+        "auth": {
+          "uid": "owner",
+          "token": {}
+        },
+        "resource": {
+          "data": {
+            "payload": "{}",
+            "extra": "not allowed"
+          }
+        }
+      },
+      "functionMocks": [
+        {
+          "function": "getAfter",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": {
+              "data": {
+                "revision": 1
+              }
+            }
+          }
+        },
+        {
+          "function": "exists",
+          "args": [
+            {
+              "anyValue": {}
+            }
+          ],
+          "result": {
+            "value": false
+          }
+        }
+      ]
+    }
+  ]
+}

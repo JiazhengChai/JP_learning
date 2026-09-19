@@ -9,13 +9,16 @@ const BACKUP_FORMAT = 'langlens-backup';
 const BACKUP_VERSION = 1;
 
 class Database {
-    constructor() {
+    constructor(name = DB_NAME, cloud = false) {
         this.db = null;
+        this.name = name;
+        this.cloud = cloud;
+        this.onLibraryChange = null;
     }
 
     init() {
         return new Promise((resolve, reject) => {
-            const req = indexedDB.open(DB_NAME, DB_VERSION);
+            const req = indexedDB.open(this.name, DB_VERSION);
 
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
@@ -87,14 +90,69 @@ class Database {
 
     _store(name, mode) {
         const tx = this.db.transaction(name, mode);
+        if (mode === 'readwrite' && name !== 'settings') {
+            tx.addEventListener('complete', () => this.onLibraryChange?.());
+        }
         return tx.objectStore(name);
     }
 
     _req(store, method, ...args) {
+        if (this.cloud && method === 'add' && store.name !== 'settings') {
+            // Keep numeric IDs compatible with routes and existing backups while
+            // avoiding sequential-ID collisions between independent devices.
+            const bytes = crypto.getRandomValues(new Uint32Array(2));
+            args[0] = { ...args[0], id: (bytes[0] & 0x1fffff) * 4294967296 + bytes[1] || 1 };
+        }
         return new Promise((resolve, reject) => {
             const r = store[method](...args);
-            r.onsuccess = () => resolve(r.result);
+            if (store.transaction.mode === 'readwrite') {
+                store.transaction.addEventListener('complete', () => resolve(r.result));
+                store.transaction.addEventListener('abort', () => reject(store.transaction.error || new Error('Save was aborted')));
+            } else r.onsuccess = () => resolve(r.result);
             r.onerror = () => reject(r.error);
+        });
+    }
+
+    // Read all related records and the last acknowledged cloud state atomically.
+    readSyncSnapshot() {
+        return new Promise((resolve, reject) => {
+            const names = ['sources', 'highlights', 'readingNotes'];
+            const tx = this.db.transaction([...names, 'settings'], 'readonly');
+            const data = {};
+            for (const name of names) {
+                tx.objectStore(name).getAll().onsuccess = event => { data[name] = event.target.result; };
+            }
+            let state = null;
+            tx.objectStore('settings').get('cloud-state').onsuccess = event => { state = event.target.result?.value || null; };
+            tx.oncomplete = () => resolve({ data, state });
+            tx.onabort = () => reject(tx.error);
+        });
+    }
+
+    // Apply incoming changes only where the user has not edited during the
+    // network request. Newer local edits remain queued for the following sync.
+    acknowledgeSync(captured, merged, state) {
+        return new Promise((resolve, reject) => {
+            const names = SyncCore.stores;
+            const tx = this.db.transaction([...names, 'settings'], 'readwrite');
+            let changed = false;
+            for (const name of names) {
+                const store = tx.objectStore(name);
+                const before = new Map(captured[name].map(row => [row.id, row]));
+                const incoming = new Map(merged[name].map(row => [row.id, row]));
+                store.getAll().onsuccess = event => {
+                    const current = new Map(event.target.result.map(row => [row.id, row]));
+                    for (const id of new Set([...before.keys(), ...incoming.keys()])) {
+                        if (!SyncCore.equal(current.get(id), before.get(id)) || SyncCore.equal(current.get(id), incoming.get(id))) continue;
+                        changed = true;
+                        if (incoming.has(id)) store.put(incoming.get(id));
+                        else store.delete(id);
+                    }
+                };
+            }
+            tx.objectStore('settings').put({ key: 'cloud-state', value: state });
+            tx.oncomplete = () => resolve(changed);
+            tx.onabort = () => reject(tx.error || new Error('Cloud changes could not be saved locally'));
         });
     }
 
@@ -299,10 +357,10 @@ class Database {
 
     _clearStore(name) {
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(name, 'readwrite');
-            const req = tx.objectStore(name).clear();
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            const store = this._store(name, 'readwrite');
+            store.clear();
+            store.transaction.oncomplete = () => resolve();
+            store.transaction.onabort = () => reject(store.transaction.error);
         });
     }
 
@@ -377,24 +435,18 @@ class Database {
     }
 
     async deleteSource(id) {
-        const sourceStore = this._store('sources', 'readwrite');
-        await this._req(sourceStore, 'delete', id);
-
-        const highlights = await this.getHighlightsBySource(id);
-        if (highlights.length > 0) {
-            const highlightStore = this._store('highlights', 'readwrite');
-            for (const highlight of highlights) {
-                highlightStore.delete(highlight.id);
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['sources', 'highlights', 'readingNotes'], 'readwrite');
+            tx.objectStore('sources').delete(id);
+            for (const name of ['highlights', 'readingNotes']) {
+                const store = tx.objectStore(name);
+                store.index('sourceId').getAllKeys(id).onsuccess = event => {
+                    for (const key of event.target.result) store.delete(key);
+                };
             }
-        }
-
-        const notes = await this.getReadingNotesBySource(id);
-        if (notes.length > 0) {
-            const notesStore = this._store('readingNotes', 'readwrite');
-            for (const note of notes) {
-                notesStore.delete(note.id);
-            }
-        }
+            tx.oncomplete = resolve;
+            tx.onabort = () => reject(tx.error);
+        });
     }
 
     async addHighlight(highlight) {
@@ -493,9 +545,27 @@ class Database {
     }
 
     async clearLibraryData() {
-        await this._clearStore('sources');
-        await this._clearStore('highlights');
-        await this._clearStore('readingNotes');
+        await this._replaceLibrary({ sources: [], highlights: [], readingNotes: [] });
+    }
+
+    _replaceLibrary(data) {
+        return new Promise((resolve, reject) => {
+            const names = ['sources', 'highlights', 'readingNotes'];
+            const tx = this.db.transaction(names, 'readwrite');
+            try {
+                for (const name of names) {
+                    const store = tx.objectStore(name);
+                    store.clear();
+                    for (const row of data[name]) store.put(row);
+                }
+            } catch (error) {
+                tx.abort();
+                reject(error);
+                return;
+            }
+            tx.oncomplete = () => { this.onLibraryChange?.(); resolve(); };
+            tx.onabort = () => reject(tx.error);
+        });
     }
 
     async clearSourceAnnotationOffsets(sourceId) {
@@ -686,21 +756,11 @@ class Database {
             return result;
         }
 
-        await this._clearStore('sources');
-        await this._clearStore('highlights');
-        await this._clearStore('readingNotes');
-
-        for (const source of payload.sources) {
-            await this._putRecord('sources', this._normalizeSource(source));
-        }
-
-        for (const highlight of payload.highlights) {
-            await this._putRecord('highlights', this._normalizeHighlight(highlight));
-        }
-
-        for (const note of payload.readingNotes) {
-            await this._putRecord('readingNotes', this._normalizeReadingNote(note));
-        }
+        await this._replaceLibrary({
+            sources: payload.sources.map(row => this._normalizeSource(row)),
+            highlights: payload.highlights.map(row => this._normalizeHighlight(row)),
+            readingNotes: payload.readingNotes.map(row => this._normalizeReadingNote(row))
+        });
 
         return {
             mode,
@@ -709,6 +769,17 @@ class Database {
             readingNotes: { total: payload.readingNotes.length, added: payload.readingNotes.length, updated: 0, skipped: 0 }
         };
     }
+}
+
+// Keep multi-step imports and cascaded deletes out of the sync reader until
+// their last transaction completes. Every mutation still persists locally.
+for (const method of ['importAll', 'clearLibraryData', 'deleteSource', 'clearSourceAnnotationOffsets']) {
+    const original = Database.prototype[method];
+    Database.prototype[method] = async function (...args) {
+        this.syncBusy = (this.syncBusy || 0) + 1;
+        try { return await original.apply(this, args); }
+        finally { this.syncBusy--; this.onLibraryChange?.(); }
+    };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

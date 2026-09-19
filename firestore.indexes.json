@@ -1,0 +1,8 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "sources", "fieldPath": "payload", "indexes": [] },
+    { "collectionGroup": "highlights", "fieldPath": "payload", "indexes": [] },
+    { "collectionGroup": "readingNotes", "fieldPath": "payload", "indexes": [] }
+  ]
+}

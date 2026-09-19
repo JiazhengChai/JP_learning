@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    match /users/{uid}/sync/state {
+      allow read: if owner(uid);
+      allow create: if owner(uid)
+        && request.resource.data.keys().hasOnly(['revision', 'updatedAt'])
+        && request.resource.data.revision == 1
+        && request.resource.data.updatedAt == request.time;
+      allow update: if owner(uid)
+        && request.resource.data.keys().hasOnly(['revision', 'updatedAt'])
+        && request.resource.data.revision == resource.data.revision + 1
+        && request.resource.data.updatedAt == request.time;
+    }
+    match /users/{uid}/{collection}/{id} {
+      function library() { return collection in ['sources', 'highlights', 'readingNotes']; }
+      function advancesRevision() {
+        let state = /databases/$(database)/documents/users/$(uid)/sync/state;
+        return getAfter(state).data.revision == (exists(state) ? get(state).data.revision : 0) + 1;
+      }
+      allow read: if owner(uid) && library();
+      allow create, update: if owner(uid) && library() && advancesRevision()
+        && request.resource.data.keys().hasOnly(['payload'])
+        && request.resource.data.payload is string
+        && request.resource.data.payload.size() <= 750000;
+      allow delete: if owner(uid) && library() && advancesRevision();
+    }
+  }
+}

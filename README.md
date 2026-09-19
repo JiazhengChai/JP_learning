@@ -4,7 +4,7 @@
 ![Static Badge](https://img.shields.io/badge/storage-IndexedDB-0d1117?style=for-the-badge)
 ![Static Badge](https://img.shields.io/badge/runtime-browser%20only-0d1117?style=for-the-badge)
 
-LangLens is a focused language study workspace for learning from real text. Import material, capture study items with a simple text-plus-note flow, and review them later with a lightweight spaced-repetition flashcard loop that stays entirely in your browser.
+LangLens is a focused language study workspace for learning from real text. Import material, capture study items with a simple text-plus-note flow, and review them later with a lightweight spaced-repetition flashcard loop. Work locally, or sign in with Google to sync progress through Firebase.
 
 ## Highlights
 
@@ -21,7 +21,14 @@ LangLens is a focused language study workspace for learning from real text. Impo
 - Point that folder at a desktop-synced location such as Google Drive Desktop, OneDrive, or Dropbox for automatic cloud sync.
 - Get a dashboard reminder when your local-first library has no recent backup.
 - Configure how quickly backup reminders appear and trigger a one-click backup from the dashboard.
-- Keep all data local with no backend or account required.
+- Work locally without an account, or sign in with Google for automatic cloud sync.
+- Keep local edits offline, sync when connected, and review conflicting edits from other devices.
+
+## Cloud Sync
+
+Google sign-in opens an account-specific library backed by Firestore. Use **Bring local progress into this account** once to migrate the existing local library. Future sessions load the account's saved progress automatically; JSON restore is optional.
+
+See [FIREBASE_SETUP.md](FIREBASE_SETUP.md) for deployment, costs, access rules, and optional Cloud Storage file sync. Cloud Storage requires the Blaze billing plan. The site itself remains on GitHub Pages.
 
 ## Screens
 
@@ -68,7 +75,7 @@ If you add screenshots later, this is a good place to show the dashboard, reader
 
 ## Data Storage
 
-All app data is stored in the browser using IndexedDB. That means:
+The working copy is stored in the browser using IndexedDB. When signed in, supported records also sync to the user's Firestore account. In local-only mode:
 
 - data stays on the current device and browser profile,
 - clearing site data removes everything,

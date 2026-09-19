@@ -31,6 +31,10 @@
     --shadow-card: rgba(0,0,0,0.3);
 }
 
+.cloud-panel { border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px; }
+.cloud-account { font-size: 12px; overflow-wrap: anywhere; color: var(--text-secondary); }
+.cloud-conflict { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; background: var(--bg-input); padding: 12px; }
+
 [data-theme="light"] {
     --bg-body: #f5f6f8;
     --bg-surface: #ffffff;
