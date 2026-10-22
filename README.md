@@ -6,6 +6,16 @@
 
 LangLens is a focused language study workspace for learning from real text. Import material, capture study items with a simple text-plus-note flow, and review them later with a lightweight spaced-repetition flashcard loop. Work locally, or sign in with Google to sync progress through Firebase.
 
+## Install on your phone
+
+Open **https://halogen-bonus-4phrv.web.app/** in Chrome on Android, open LangLens's **Menu**, then tap **Install LangLens**. You can also use Chrome's **⋮ → Add to home screen → Install** (wording varies by Chrome version). It opens in its own app window from your home screen. This is an installable web app; no APK or Play Store download is needed.
+
+On iPhone/iPad, use **Share → Add to Home Screen**. If Chrome does not offer that option, open the same address in Safari.
+
+Wait for **Ready for offline use** before disconnecting. Saved texts, notes, locally downloaded PDFs, and reviews then work offline. Google sign-in, synchronization, remote images, and attachments not yet downloaded require internet. Updates wait until all LangLens tabs/app windows are closed, so an update never reloads an open editor.
+
+The existing **https://jiazhengchai.github.io/JP_learning/** address remains supported and installable too. Each address has its own local browser storage and app installation. When moving to the new address, sign in with the same Google account after syncing at the old address. For local-only progress, export a backup at the old address and restore it at the new one. Installation alone does not transfer data between addresses.
+
 ## Highlights
 
 - Read from a personal library of imported texts.
@@ -29,7 +39,7 @@ LangLens is a focused language study workspace for learning from real text. Impo
 
 Google sign-in opens an account-specific library backed by Firestore. Use **Bring local progress into this account** once to migrate the existing local library. Future sessions load the account's saved progress automatically; JSON restore is optional.
 
-See [FIREBASE_SETUP.md](FIREBASE_SETUP.md) for deployment, costs, access rules, and optional Cloud Storage file sync. Cloud Storage requires the Blaze billing plan. The site itself remains on GitHub Pages.
+See [FIREBASE_SETUP.md](FIREBASE_SETUP.md) for deployment, costs, access rules, and Cloud Storage file sync. The primary app is served by Firebase Hosting in the existing GCP project; GitHub Pages remains available.
 
 ## Screens
 
@@ -69,6 +79,17 @@ Then open `http://localhost:8000`.
 npm install
 npm test
 ```
+
+## Build and deploy
+
+```bash
+npm ci
+npm test
+npm run build
+npx firebase-tools deploy --only hosting --project halogen-bonus-4phrv
+```
+
+The build generates PNG icons from the existing SVG, updates the service-worker cache revision from the public files' content, and copies only public app assets into `dist/`. Firebase Hosting runs this build automatically before deployment. Commit the generated `icons/` and `sw.js` when publishing to GitHub Pages, which serves the repository root. When adding app dependencies, update `SHELL_FILES` in `sw.js`; tests check that local HTML dependencies are included. Keep manifest paths relative so both hosting roots work.
 
 ## Preview
 

@@ -1988,7 +1988,7 @@ class App {
             }
 
             try {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
                 const arrayBuffer = await file.arrayBuffer();
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 const pages = [];
@@ -5970,7 +5970,7 @@ class App {
         }
 
         try {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
             const pdf = await pdfjsLib.getDocument({ data: this.dataUrlToUint8Array(source.fileDataUrl) }).promise;
 
             if (renderToken !== this._fileRenderToken || this.currentSource?.id !== source.id) {

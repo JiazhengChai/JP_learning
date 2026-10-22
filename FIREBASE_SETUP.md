@@ -1,6 +1,16 @@
 # Firebase setup for LangLens
 
-Project: `halogen-bonus-4phrv`. The app continues to run as a static GitHub Pages site.
+Project: `halogen-bonus-4phrv`. Primary app: **https://halogen-bonus-4phrv.web.app/**, served by Firebase Hosting in the existing GCP project. GitHub Pages remains available at **https://jiazhengchai.github.io/JP_learning/**.
+
+## Hosting and phone installation
+
+Firebase Hosting is appropriate for this static app and supplies HTTPS without a Cloud Run server. `firebase.json` publishes only the generated `dist/` directory, with revalidation headers for reliable app updates. Deploy with `npx firebase-tools deploy --only hosting --project halogen-bonus-4phrv`; the predeploy hook runs `npm run build`. This does not deploy or change database/security rules.
+
+The app manifest, PNG icons, and service worker support Android Chrome installation and offline launch. The service worker caches only an explicit list of public app files. Private account records and attachments stay in the existing IndexedDB/sync system. PDF.js and its worker are now served locally at the previously used pinned version, with the upstream license included. Fonts use system fallbacks offline. Updates activate after all old app windows close.
+
+The Hosting domains `halogen-bonus-4phrv.web.app` and `halogen-bonus-4phrv.firebaseapp.com` are authorized for Firebase Authentication and have been added to bucket download CORS alongside the existing origins. Bucket IAM and owner-only access rules are unchanged.
+
+Browser storage is origin-specific: users moving from GitHub Pages should first finish cloud sync there, then sign into the same account at the new address, or export/restore a backup for local-only libraries. Do not redirect the old address automatically, since users may still need access to its local data.
 
 ## Services
 

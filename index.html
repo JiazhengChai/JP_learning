@@ -4,12 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>LangLens - Read. Capture. Review.</title>
+    <meta name="theme-color" content="#0f766e">
+    <meta name="description" content="Read, capture notes, and review your language learning library, even offline.">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="LangLens">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=20260919-mobile1">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <link rel="stylesheet" href="styles.css?v=20261023-pwa1">
+    <script defer src="vendor/pdf.min.js"></script>
 </head>
 <body>
     <header class="mobile-header">
@@ -43,6 +49,8 @@
             </a>
         </nav>
         <div class="sidebar-footer">
+            <button id="btn-install" class="btn-subtle btn-subtle-primary btn-subtle-full" hidden>↓ Install LangLens</button>
+            <div id="pwa-status" class="backup-footer-status" role="status" hidden></div>
             <div id="cloud-panel" class="cloud-panel"></div>
             <button id="btn-theme" class="theme-toggle" title="Toggle light/dark theme">🌙 Dark</button>
             <button id="btn-quick-backup" class="btn-subtle btn-subtle-primary btn-subtle-full" title="Save an encrypted JSON backup in one click">💾 Instant Backup</button>
@@ -79,6 +87,14 @@
     <!-- Toast -->
     <div id="toast" class="toast hidden"></div>
 
+    <dialog id="install-help" class="install-help" aria-labelledby="install-title">
+        <h2 id="install-title">Install LangLens</h2>
+        <p>Add LangLens to your home screen to open it in its own app window.</p>
+        <p id="install-instructions"></p>
+        <p>Once the app says “Ready for offline use”, saved texts, notes, PDFs, and reviews work offline. Sign-in, cloud sync, and files not yet downloaded need a connection.</p>
+        <form method="dialog"><button class="btn btn-primary">Got it</button></form>
+    </dialog>
+
     <script src="js/backup-utils.js?v=20260919-mobile1"></script>
     <script src="js/firebase-config.js?v=20260919-mobile1"></script>
     <script src="js/sync-core.js?v=20260919-mobile1"></script>
@@ -86,5 +102,6 @@
     <script src="js/cloud-sync.js?v=20260919-mobile1"></script>
     <script src="js/item-import-utils.js?v=20260919-mobile1"></script>
     <script src="js/app.js?v=20260919-mobile1"></script>
+    <script src="js/pwa.js"></script>
 </body>
 </html>

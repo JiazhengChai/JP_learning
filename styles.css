@@ -32,6 +32,10 @@
 }
 
 .cloud-panel { border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px; }
+.install-help { margin: auto; width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text); }
+.install-help::backdrop { background: rgba(0, 0, 0, 0.55); }
+.install-help p { margin: 16px 0; }
+.install-help form { display: flex; justify-content: flex-end; }
 .cloud-account { font-size: 12px; overflow-wrap: anywhere; color: var(--text-secondary); }
 .cloud-conflict { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; background: var(--bg-input); padding: 12px; }
 

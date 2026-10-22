@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "build": "node scripts/build.js",
     "test": "node --test tests/*.test.js"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "fake-indexeddb": "^6.2.2"
   }
 }

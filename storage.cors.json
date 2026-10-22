@@ -1,6 +1,6 @@
 [
   {
-    "origin": ["https://jiazhengchai.github.io", "http://localhost:8000", "http://127.0.0.1:8000"],
+    "origin": ["https://jiazhengchai.github.io", "https://halogen-bonus-4phrv.web.app", "https://halogen-bonus-4phrv.firebaseapp.com", "http://localhost:8000", "http://127.0.0.1:8000"],
     "method": ["GET"],
     "maxAgeSeconds": 3600
   }
