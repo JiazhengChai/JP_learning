@@ -1641,6 +1641,7 @@ class App {
         }
 
         document.getElementById('main').scrollTop = 0;
+        this.cloud?.resumeAfterEditing();
     }
 
     showModal(html, opts = {}) {
@@ -1697,6 +1698,7 @@ class App {
         this.setNavigationOpen(false, false);
         if (wasOpen && this._modalReturnFocus?.isConnected && !this._modalReturnFocus.closest('[inert]')) this._modalReturnFocus.focus();
         else if (wasOpen && this.mobileLayout?.matches) document.getElementById('menu-toggle').focus();
+        this.cloud?.resumeAfterEditing();
     }
 
     isModalOpen() {
@@ -3472,7 +3474,6 @@ class App {
         const folderLine = this.backupState.folderHandle
             ? `${this.backupState.folderName || 'selected folder'} (${this.backupState.folderPermission})`
             : 'Not configured';
-        const thresholdDays = this.backupThresholdDays();
 
         this.showModal(`
             <h3>Backup & Restore</h3>
@@ -3502,16 +3503,6 @@ class App {
                         <div class="backup-summary-card"><div class="value">${summary.counts.sources}</div><div class="label">Texts</div></div>
                         <div class="backup-summary-card"><div class="value">${summary.counts.highlights}</div><div class="label">Items</div></div>
                         <div class="backup-summary-card"><div class="value">${summary.counts.readingNotes}</div><div class="label">Notes</div></div>
-                    </div>
-                    <div class="form-group backup-threshold-group">
-                        <label for="backup-threshold-days">Reminder threshold</label>
-                        <select id="backup-threshold-days">
-                            <option value="1" ${thresholdDays === 1 ? 'selected' : ''}>1 day</option>
-                            <option value="3" ${thresholdDays === 3 ? 'selected' : ''}>3 days</option>
-                            <option value="7" ${thresholdDays === 7 ? 'selected' : ''}>7 days</option>
-                            <option value="14" ${thresholdDays === 14 ? 'selected' : ''}>14 days</option>
-                            <option value="30" ${thresholdDays === 30 ? 'selected' : ''}>30 days</option>
-                        </select>
                     </div>
                     <div class="backup-field-hint">Use Replace restore for a full recovery on another browser. Use Merge only when you want to combine libraries.</div>
                 </div>
@@ -3654,18 +3645,6 @@ class App {
                 this.showToast(err.message, 'error');
             }
         });
-        document.getElementById('backup-threshold-days')?.addEventListener('change', async (e) => {
-            try {
-                await this.setBackupThresholdDays(e.target.value);
-                this.showToast('Backup reminder threshold updated', 'success');
-                if (this.currentView === 'dashboard') {
-                    await this.renderDashboard();
-                }
-            } catch (err) {
-                this.showToast(err.message, 'error');
-            }
-        });
-
         const getBackupOptions = () => {
             const backupName = BackupUtils.normalizeBackupName(document.getElementById('backup-name')?.value || '');
             if (!backupName) {
@@ -3746,54 +3725,11 @@ class App {
         const sourceMap = {};
         for (const source of sources) sourceMap[source.id] = source;
         const recentActivity = this.buildRecentActivity(sources, items, visibleReadingNotes, sourceMap);
-        const backupReminder = BackupUtils.getBackupReminder({
-            totalSources: stats.totalSources,
-            totalHighlights: stats.totalHighlights,
-            totalReadingNotes: visibleReadingNotes.length,
-            lastBackupAt: this.backupState.lastBackupAt,
-            thresholdMs: this.backupState.backupThresholdMs
-        });
-        if (this.db.cloud) backupReminder.title = 'Optional recovery backup';
-        const reminderMessage = this.db.cloud
-            ? 'Account sync runs automatically when connected. A separate JSON backup can help recover accidental deletions.'
-            : backupReminder.kind === 'stale' && this.backupState.lastBackupAt
-            ? `${backupReminder.message} Last backup was ${this.relativeTime(this.backupState.lastBackupAt)}.`
-            : backupReminder.message;
-        const migrationMessage = this.migrationNotice
-            ? `This library was upgraded from DB v${this.migrationNotice.fromVersion} to v${this.migrationNotice.toVersion}. Backup controls and folder recovery support are now available.`
-            : '';
-
         const view = document.getElementById('view-dashboard');
         view.innerHTML = `
             <div class="view-header">
                 <h2>Dashboard</h2>
             </div>
-
-            ${this.migrationNotice ? `
-                <div class="migration-banner">
-                    <div>
-                        <div class="migration-banner-title">Backup Protection Added</div>
-                        <p>${this.esc(migrationMessage)}</p>
-                    </div>
-                    <div class="migration-banner-actions">
-                        <button class="btn btn-secondary" id="dash-migration-open">Open Backup</button>
-                        <button class="btn btn-secondary" id="dash-migration-dismiss">Dismiss</button>
-                    </div>
-                </div>
-            ` : ''}
-
-            ${backupReminder.shouldShow ? `
-                <div class="backup-reminder backup-reminder-${backupReminder.kind}">
-                    <div>
-                        <div class="backup-reminder-title">${this.esc(backupReminder.title)}</div>
-                        <p>${this.esc(reminderMessage)}</p>
-                    </div>
-                    <div class="migration-banner-actions">
-                        <button class="btn btn-primary" id="dash-backup-now">Create Backup Now</button>
-                        <button class="btn btn-secondary" id="dash-open-backup">Open Backup</button>
-                    </div>
-                </div>
-            ` : ''}
 
             <div class="stats-grid">
                 <div class="stat-card">
@@ -3833,7 +3769,6 @@ class App {
                 <button class="btn btn-secondary btn-lg" id="dash-import-item-list">📥 Import List</button>
                 <button class="btn btn-secondary btn-lg" id="dash-review" ${stats.totalHighlights === 0 ? 'disabled' : ''}>🧠 ${stats.dueCount > 0 ? `Review (${stats.dueCount})` : 'Review Items'}</button>
                 <button class="btn btn-secondary btn-lg" id="dash-add-source">📚 Add Source</button>
-                <button class="btn btn-secondary btn-lg" id="dash-backup">💾 Backup</button>
             </div>
 
             <div class="library-dropzone dashboard-dropzone" id="dashboard-dropzone">
@@ -3876,12 +3811,7 @@ class App {
         document.getElementById('dash-import-item-list')?.addEventListener('click', () => {
             this.showImportItemListModal();
         });
-        document.getElementById('dash-migration-open')?.addEventListener('click', () => this.showBackupCenter());
-        document.getElementById('dash-migration-dismiss')?.addEventListener('click', () => this.dismissMigrationNotice());
-        document.getElementById('dash-backup-now')?.addEventListener('click', () => this.createLatestBackupNow());
-        document.getElementById('dash-open-backup')?.addEventListener('click', () => this.showBackupCenter());
         document.getElementById('dash-add-source')?.addEventListener('click', () => this.showAddSourceModal());
-        document.getElementById('dash-backup')?.addEventListener('click', () => this.showBackupCenter());
         document.getElementById('dash-review')?.addEventListener('click', async () => {
             await this.navigate('review');
             if (stats.dueCount > 0) {

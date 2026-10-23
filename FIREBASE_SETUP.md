@@ -33,7 +33,7 @@ Use `storage.cors.json` for authenticated browser downloads. Adjust its origin l
 
 - Signed-out users keep the original local library. Signing in opens a separate local database for that account and automatically loads cloud progress.
 - On first sign-in to a never-used, empty cloud account, the existing guest library migrates automatically. The original guest copy is retained; a migration marker prevents automatic reuse in a different account. Existing cloud accounts can use **Bring local progress into this account** to merge a guest library explicitly. Cloud deletions never trigger automatic recovery. Existing JSON files can also be restored using the existing Restore dialog.
-- Edits persist locally first. Changes sync shortly afterward, on reconnect, and when the app becomes visible. Other devices receive notifications through a small Firestore revision document.
+- Edits persist locally first. Each saved change schedules synchronization immediately, on reconnect, and when the app becomes visible. Changes made during an upload queue an immediate follow-up sync. Incoming updates that would interrupt an editor wait until editing finishes, then resume immediately. Other devices receive notifications through a small Firestore revision document.
 - Simultaneous edits to different records merge. Competing edits to the same record pause synchronization and offer both versions for review; there is no silent last-device-wins overwrite.
 - Signing out switches back to the guest library. Pending changes stay in the account's local cache and sync after signing back in.
 - **Clear Data while signed in also deletes the cloud library after syncing.** JSON backups remain available for recovery. Cloud sync itself is not a historical backup.

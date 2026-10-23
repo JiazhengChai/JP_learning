@@ -137,9 +137,15 @@ test('invalid replacement backup rolls back without clearing existing progress',
 
 function memoryFirestore() {
     const records = new Map();
+    const listeners = new Set();
     let revision = 0;
     return {
         records,
+        onSnapshot: (_ref, _options, callback) => {
+            listeners.add(callback);
+            callback({ metadata: { hasPendingWrites: false, fromCache: false } });
+            return () => listeners.delete(callback);
+        },
         doc: (_, ...parts) => parts.join('/'),
         collection: (_, ...parts) => parts.join('/'),
         getDocFromServer: async () => ({ data: () => ({ revision }) }),
@@ -153,6 +159,7 @@ function memoryFirestore() {
                 delete: ref => writes.push(() => records.delete(ref))
             });
             writes.forEach(write => write());
+            for (const callback of listeners) callback({ metadata: { hasPendingWrites: false, fromCache: false } });
         }
     };
 }
@@ -297,4 +304,82 @@ test('file upload failure preserves local source and linked progress, then retri
         globalThis.FileReader = previousReader;
         a.app.db.db.close(); b.app.db.db.close();
     }
+});
+
+test('live listeners sync saves, edits during upload, remote changes and reconnects without manual sync', async () => {
+    const previousWindow = globalThis.window;
+    const previousDocument = globalThis.document;
+    globalThis.window = new EventTarget();
+    globalThis.document = new EventTarget();
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true, locks: { request: async (_, action) => action() } } });
+    const server = memoryFirestore();
+    const a = await device(server);
+    const b = await device(server);
+    const waitFor = async predicate => {
+        const deadline = Date.now() + 1200;
+        while (!(await predicate())) {
+            assert.ok(Date.now() < deadline, 'automatic sync should complete without the old 1.5-second delay');
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+    };
+    try {
+        for (const client of [a, b]) {
+            client.schedule = CloudSync.prototype.schedule;
+            client.start();
+        }
+        await waitFor(() => !a.running && !b.running && !a.timer && !b.timer);
+        let releaseUpload;
+        let uploadEntered = false;
+        const originalTransaction = server.runTransaction;
+        const upload = new Promise(resolve => { releaseUpload = resolve; });
+        server.runTransaction = async (...args) => {
+            uploadEntered = true;
+            await upload;
+            return originalTransaction(...args);
+        };
+        const first = await a.app.db.addHighlight({ text: 'first save' });
+        await waitFor(() => uploadEntered);
+        const second = await a.app.db.addHighlight({ text: 'saved during upload' });
+        releaseUpload();
+        await waitFor(async () => (await b.app.db.getHighlight(second))?.text === 'saved during upload');
+        assert.equal((await b.app.db.getHighlight(first)).text, 'first save');
+        await waitFor(() => !a.running && !b.running && !a.timer && !b.timer);
+        navigator.onLine = false;
+        await b.app.db.updateHighlight({ ...(await b.app.db.getHighlight(first)), text: 'offline change' });
+        await waitFor(() => /Offline/.test(b.message));
+        navigator.onLine = true;
+        window.dispatchEvent(new Event('online'));
+        await waitFor(async () => (await a.app.db.getHighlight(first))?.text === 'offline change');
+        assert.equal(a.lastError, undefined);
+        assert.equal(b.lastError, undefined);
+    } finally {
+        for (const client of [a, b]) {
+            client.schedule = () => {};
+            clearTimeout(client.timer);
+        }
+        await waitFor(() => !a.running && !b.running);
+        a.app.db.db.close(); b.app.db.db.close();
+        globalThis.window = previousWindow;
+        globalThis.document = previousDocument;
+    }
+});
+
+test('sync events keep the earliest deadline and resume promptly after an editor closes', t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    const client = new CloudSync({ isModalOpen: () => false, currentView: 'dashboard' });
+    let calls = 0;
+    client.sync = () => { calls++; };
+    client.schedule(30000);
+    client.schedule();
+    client.schedule(5000);
+    t.mock.timers.tick(0);
+    assert.equal(calls, 1);
+    client.waitingForEditor = true;
+    client.schedule(5000);
+    client.resumeAfterEditing();
+    t.mock.timers.tick(0);
+    assert.equal(calls, 2);
+    assert.equal(client.waitingForEditor, false);
+    t.mock.timers.tick(30000);
+    assert.equal(calls, 2);
 });

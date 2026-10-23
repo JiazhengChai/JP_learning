@@ -1,5 +1,5 @@
 /* Generated asset list/revision is refreshed by npm run build. Keep at the app root. */
-const CACHE_VERSION = 'langlens-shell-953feaae1f0f8a1d';
+const CACHE_VERSION = 'langlens-shell-5d981dfad9cb0297';
 const SHELL_FILES = [
     './', './index.html', './styles.css?v=20261023-pwa1', './favicon.svg',
     './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png',

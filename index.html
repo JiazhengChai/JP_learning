@@ -52,6 +52,9 @@
             <button id="btn-install" class="btn-subtle btn-subtle-primary btn-subtle-full" hidden>↓ Install LangLens</button>
             <div id="pwa-status" class="backup-footer-status" role="status" hidden></div>
             <div id="cloud-panel" class="cloud-panel"></div>
+            <details class="sidebar-settings">
+                <summary>⚙ Settings</summary>
+                <div class="sidebar-settings-content">
             <button id="btn-theme" class="theme-toggle" title="Toggle light/dark theme">🌙 Dark</button>
             <button id="btn-quick-backup" class="btn-subtle btn-subtle-primary btn-subtle-full" title="Save an encrypted JSON backup in one click">💾 Instant Backup</button>
             <div class="sidebar-footer-actions">
@@ -61,6 +64,8 @@
             <button id="btn-clear-data" class="btn-subtle btn-subtle-full btn-subtle-danger" title="Clear current library data">🗑 Clear Data</button>
             <div id="backup-footer-status" class="backup-footer-status">Persistent storage unavailable<br>No backup saved yet</div>
             <input type="file" id="import-file" accept=".json" hidden>
+                </div>
+            </details>
         </div>
     </aside>
 

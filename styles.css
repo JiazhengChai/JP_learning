@@ -320,6 +320,9 @@ nav { flex: 1 0 auto; padding: 12px 0; }
     gap: 8px;
     width: 100%;
 }
+.sidebar-settings summary { cursor: pointer; padding: 12px 8px; min-height: 44px; color: var(--text); border-radius: var(--radius); }
+.sidebar-settings summary:hover { background: var(--bg-card-hover); }
+.sidebar-settings-content { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .sidebar-footer-actions .btn-subtle {
     flex: 1 1 0;
     min-width: 0;

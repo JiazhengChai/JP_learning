@@ -30,10 +30,9 @@ The existing **https://jiazhengchai.github.io/JP_learning/** address remains sup
 - Create encrypted backups and restore them later with a passphrase.
 - Request persistent browser storage and save backups into a chosen folder, or pick one when the browser supports it.
 - Point that folder at a desktop-synced location such as Google Drive Desktop, OneDrive, or Dropbox for automatic cloud sync.
-- Get a dashboard reminder when your local-first library has no recent backup.
-- Configure how quickly backup reminders appear and trigger a one-click backup from the dashboard.
+- Open Settings for optional manual backups and restore tools; the dashboard stays focused on learning.
 - Work locally without an account, or sign in with Google for automatic cloud sync.
-- Keep local edits offline, sync when connected, and review conflicting edits from other devices.
+- Sync saved changes immediately when connected, keep offline edits queued until reconnection, and review conflicting edits from other devices.
 
 ## Cloud Sync
 
@@ -120,8 +119,7 @@ The working copy is stored in the browser using IndexedDB. When signed in, suppo
 - On Chromium-based browsers, you can also save backups directly into a folder, keep that folder selected across sessions, and let LangLens auto-update the named encrypted backup file after changes.
 - That folder can be a cloud-synced desktop folder, which gives you automatic off-device backup without adding a backend.
 - If a sync folder is configured, Restore can pull the named current backup file directly from that folder, then fall back to the `-previous` safety copy and older legacy LangLens backup names.
-- The backup center lets you choose the reminder threshold in days.
-- After upgrading older local databases, the dashboard shows a short migration notice pointing users to the new backup tools.
+- Manual backup, restore, and folder-backup preferences are available under Settings.
 
 ## Project Structure
 

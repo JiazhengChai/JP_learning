@@ -8,6 +8,9 @@ class CloudSync {
         this.running = false;
         this.message = 'Saved on this browser';
         this.timer = null;
+        this.timerDue = 0;
+        this.resyncRequested = false;
+        this.waitingForEditor = false;
     }
 
     async prepare() {
@@ -60,7 +63,10 @@ class CloudSync {
         this.render();
         if (!this.user) return;
         this.meta = this.fs.doc(this.firestore, 'users', this.user.uid, 'sync', 'state');
-        this.app.db.onLibraryChange = () => { this.setStatus('Saved locally · syncing soon'); this.schedule(); };
+        this.app.db.onLibraryChange = () => {
+            this.setStatus(navigator.onLine ? 'Saved locally · syncing…' : 'Offline · changes saved on this device');
+            this.schedule();
+        };
         this.fs.onSnapshot(this.meta, { includeMetadataChanges: true }, snapshot => {
             if (!snapshot.metadata.hasPendingWrites && !snapshot.metadata.fromCache) this.schedule();
         }, error => this.fail(error));
@@ -111,9 +117,25 @@ class CloudSync {
         });
     }
 
-    schedule(delay = 1500) {
+    schedule(delay = 0) {
+        // Coalesce events without delaying the first save or polling a busy upload.
+        if (this.running && delay === 0) { this.resyncRequested = true; return; }
+        const due = Date.now() + delay;
+        if (this.timer !== null && this.timerDue <= due) return;
         clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.sync(), delay);
+        this.timerDue = due;
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            this.timerDue = 0;
+            this.sync();
+        }, delay);
+    }
+
+    resumeAfterEditing() {
+        if (this.waitingForEditor && !this.editing()) {
+            this.waitingForEditor = false;
+            this.schedule();
+        }
     }
 
     editing() {
@@ -262,7 +284,11 @@ class CloudSync {
 
     async sync() {
         if (!this.user || this.auth.currentUser?.uid !== this.user.uid) return;
-        if (this.running || this.app.db.syncBusy) { this.schedule(); return; }
+        if (this.running) { this.resyncRequested = true; return; }
+        if (this.app.db.syncBusy) { this.schedule(100); return; }
+        clearTimeout(this.timer);
+        this.timer = null;
+        this.timerDue = 0;
         if (!navigator.onLine) { this.setStatus('Offline · changes saved on this device'); return; }
         this.running = true;
         try {
@@ -270,7 +296,7 @@ class CloudSync {
             // still happen while the network is busy; acknowledgeSync preserves them.
             if (!navigator.locks) throw new Error('This browser needs Web Locks support for safe cloud sync');
             await navigator.locks.request(`langlens-sync-${this.user.uid}`, async () => {
-                if (this.app.db.syncBusy) { this.schedule(); return; }
+                if (this.app.db.syncBusy) { this.schedule(100); return; }
                 this.setStatus('Syncing…');
                 let captured = await this.app.db.readSyncSnapshot();
                 const remote = await this.readRemote(captured.state);
@@ -279,6 +305,7 @@ class CloudSync {
                 }
                 const base = captured.state?.data || SyncCore.empty();
                 if (this.editing() && SyncCore.changes(base, remote.data).length) {
+                    this.waitingForEditor = true;
                     this.setStatus('Cloud updates waiting · finish editing to sync');
                     this.schedule(5000);
                     return;
@@ -313,6 +340,7 @@ class CloudSync {
                 }
                 let published = remote;
                 if (this.editing() && SyncCore.changes(captured.data, merged.data).length) {
+                    this.waitingForEditor = true;
                     this.schedule(5000);
                     return;
                 }
@@ -331,6 +359,7 @@ class CloudSync {
                     published = { revision: remote.revision + 1, data: SyncCore.apply(remote.data, edits) };
                 }
                 if (this.editing() && SyncCore.changes(captured.data, merged.data).length) {
+                    this.waitingForEditor = true;
                     this.schedule(5000);
                     return;
                 }
@@ -353,7 +382,13 @@ class CloudSync {
         } catch (error) {
             this.fail(error);
             this.schedule(30000);
-        } finally { this.running = false; }
+        } finally {
+            this.running = false;
+            if (this.resyncRequested) {
+                this.resyncRequested = false;
+                this.schedule();
+            }
+        }
     }
 }
 if (typeof module !== 'undefined') module.exports = CloudSync;
